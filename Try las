@@ -1,0 +1,67 @@
+import can
+import time
+
+def send_and_receive():
+    """
+    Sends data to the ECU using Vector CANalyzer and waits for a response.
+    """
+    # User configuration
+    channel = 0  # CANalyzer channel (adjust based on your hardware setup)
+    bitrate = 500000  # CAN bus bitrate (adjust as required)
+    app_name = "CANalyzer"  # Vector application name
+    tx_id = 0x18DA03FA  # Transmit arbitration ID
+    data_to_send = [0x02, 0x10, 0x01]  # Data payload to send
+
+    try:
+        # Configure the CAN bus using Vector API
+        bus = can.interface.Bus(
+            bustype="vector",
+            channel=channel,
+            bitrate=bitrate,
+            app_name=app_name
+        )
+        print(f"Connected to CANalyzer on channel {channel} with bitrate {bitrate}.")
+
+        # Create the message
+        msg = can.Message(
+            arbitration_id=tx_id,
+            data=data_to_send,
+            is_extended_id=True  # Tx ID is extended
+        )
+
+        # Send the message
+        try:
+            bus.send(msg)
+            print(f"Sent: Arbitration ID={hex(tx_id)}, Data={data_to_send}")
+        except can.CanError as e:
+            print(f"Error while sending message: {e}")
+            return
+
+        # Listen for response with timeout
+        print("Waiting for response...")
+        response = bus.recv(timeout=5.0)  # Timeout set to 5 seconds
+
+        # Process and print the response
+        if response:
+            received_id = hex(response.arbitration_id)
+            received_data = list(response.data)
+            print(f"Received: Arbitration ID={received_id}, Data={received_data}")
+
+            # Check if the response matches expectations
+            if received_data == data_to_send:
+                print("Response matches sent data.")
+            else:
+                print("Response received but does not match sent data.")
+        else:
+            print("No response received within timeout.")
+
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        # Clean up the bus connection
+        if 'bus' in locals():
+            bus.shutdown()
+            print("Bus connection closed.")
+
+if __name__ == "__main__":
+    send_and_receive()
