@@ -1,0 +1,48 @@
+import can
+import time
+
+def send_and_receive():
+    """
+    Send data to the ECU and receive its response.
+    """
+    # Configure the CAN bus using Vector API
+    bus = can.interface.Bus(
+        bustype='vector', 
+        channel=0,  # Change this to your specific CANalyzer channel
+        bitrate=500000,  # Common CAN bus bitrate, adjust if needed
+        app_name='CANalyzer'
+    )
+
+    # Data to send: 02, 10, 01
+    tx_id = 0x18DA03FA  # Provided Tx ID
+    data_to_send = [0x02, 0x10, 0x01]
+
+    # Create a CAN message
+    msg = can.Message(
+        arbitration_id=tx_id,
+        data=data_to_send,
+        is_extended_id=True
+    )
+
+    try:
+        # Send the message
+        bus.send(msg)
+        print(f"Message sent: ID={hex(tx_id)} Data={data_to_send}")
+
+        # Wait for a response (blocking for up to 2 seconds)
+        response = bus.recv(timeout=2.0)
+
+        if response:
+            print(f"Response received: ID={hex(response.arbitration_id)} Data={list(response.data)}")
+        else:
+            print("No response received within timeout.")
+
+    except can.CanError as e:
+        print(f"CAN Error: {e}")
+
+    finally:
+        # Cleanup the bus
+        bus.shutdown()
+
+if __name__ == "__main__":
+    send_and_receive()
