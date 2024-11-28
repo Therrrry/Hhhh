@@ -1,0 +1,63 @@
+import can
+
+def initialize_bus():
+    """
+    Initializes the CAN bus using the Vector interface.
+    """
+    try:
+        # Initialize the CAN bus with Vector hardware
+        bus = can.interface.Bus(bustype='vector', channel=0, bitrate=500000, app_name='CANalyzer')
+        print("CAN bus initialized successfully.")
+        return bus
+    except Exception as e:
+        print(f"Error initializing CAN bus: {e}")
+        return None
+
+
+def send_can_message(bus, arbitration_id, data):
+    """
+    Sends a CAN message on the initialized bus.
+    """
+    try:
+        # Create a CAN message
+        message = can.Message(arbitration_id=arbitration_id, data=data, is_extended_id=False)
+        bus.send(message)
+        print(f"Message sent: ID={hex(arbitration_id)}, Data={data}")
+    except Exception as e:
+        print(f"Error sending CAN message: {e}")
+
+
+def receive_can_message(bus, timeout=5):
+    """
+    Receives a CAN message from the bus with a timeout.
+    """
+    try:
+        # Wait for a CAN message
+        message = bus.recv(timeout=timeout)
+        if message:
+            print(f"Message received: ID={hex(message.arbitration_id)}, Data={message.data}")
+            return message
+        else:
+            print("No message received within the timeout period.")
+            return None
+    except Exception as e:
+        print(f"Error receiving CAN message: {e}")
+        return None
+
+
+if __name__ == "__main__":
+    # Initialize the CAN bus
+    bus = initialize_bus()
+
+    if bus:
+        # Send a CAN message
+        arbitration_id = 0x123  # Example arbitration ID
+        data = [0x11, 0x22, 0x33, 0x44]  # Example data
+        send_can_message(bus, arbitration_id, data)
+
+        # Receive a CAN message
+        received_message = receive_can_message(bus, timeout=10)
+
+        # Cleanup the bus
+        bus.shutdown()
+        print("CAN bus closed.")
