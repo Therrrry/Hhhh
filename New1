@@ -1,0 +1,71 @@
+import can
+import time
+
+# Function to send a CAN message
+def send_can_message(bus, arbitration_id, data):
+    try:
+        message = can.Message(arbitration_id=arbitration_id, data=data, is_extended_id=False)
+        bus.send(message)
+        print(f"Message sent: ID=0x{arbitration_id:X}, Data={data}")
+    except can.CanError as e:
+        print(f"Failed to send message: {e}")
+
+# Function to receive a CAN message
+def receive_can_message(bus, timeout=1.0):
+    try:
+        message = bus.recv(timeout)
+        if message:
+            print(f"Received message: ID=0x{message.arbitration_id:X}, Data={list(message.data)}")
+            return message
+        else:
+            print("No message received (timeout).")
+    except can.CanError as e:
+        print(f"Error while receiving message: {e}")
+
+# Main script
+def main():
+    # Configuration variables (update these as needed)
+    channel = "can0"  # CAN interface (e.g., "can0", "pcan0", "vcan0")
+    bitrate = 500000  # Bitrate of your ECU's CAN network (adjust accordingly)
+
+    # CAN arbitration IDs and data payloads
+    check_connection_id = 0x7DF  # Arbitrary ID for connection check
+    check_connection_data = [0x01, 0x00]  # Request data for connection check
+    
+    reset_ecu_id = 0x7DF  # Arbitrary ID for ECU reset (can be ECU-specific)
+    reset_ecu_data = [0x01, 0x11]  # Reset command data (adjust as per your protocol)
+
+    try:
+        # Initialize CAN bus
+        print(f"Initializing CAN bus on channel '{channel}' with bitrate {bitrate}...")
+        bus = can.interface.Bus(channel=channel, bustype='socketcan', bitrate=bitrate)
+
+        # Step 1: Check ECU connection
+        print("Sending connection check message to ECU...")
+        send_can_message(bus, check_connection_id, check_connection_data)
+        response = receive_can_message(bus, timeout=2.0)  # Wait 2 seconds for a response
+
+        if response:
+            print("ECU is connected and responding!")
+        else:
+            print("No response from ECU. Check connection or message format.")
+
+        # Step 2: Reset the ECU
+        print("Sending reset command to ECU...")
+        send_can_message(bus, reset_ecu_id, reset_ecu_data)
+        response = receive_can_message(bus, timeout=2.0)
+
+        if response:
+            print("ECU reset acknowledged.")
+        else:
+            print("No acknowledgment for reset command.")
+
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if 'bus' in locals():
+            bus.shutdown()
+            print("CAN bus shut down.")
+
+if __name__ == "__main__":
+    main()
