@@ -1,0 +1,84 @@
+import can
+import isotp
+import time
+
+
+# Function to send an ISO-TP message
+def send_isotp_message(iso_session, data):
+    try:
+        iso_session.send(data)
+        print(f"ISO-TP Message sent: {data}")
+    except Exception as e:
+        print(f"Failed to send ISO-TP message: {e}")
+
+
+# Function to receive an ISO-TP message
+def receive_isotp_message(iso_session, timeout=1.0):
+    try:
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            response = iso_session.recv()
+            if response:
+                print(f"ISO-TP Message received: {list(response)}")
+                return response
+        print("No ISO-TP message received (timeout).")
+    except Exception as e:
+        print(f"Error receiving ISO-TP message: {e}")
+
+
+# Main script
+def main():
+    # Configuration variables
+    can_channel = "can0"  # CAN interface (e.g., "can0", "vcan0", "pcan0")
+    can_bitrate = 500000  # Bitrate of the CAN network
+
+    # ISO-TP addressing details
+    source_address = 0x0F  # Source address (your tool/diagnostic device)
+    target_address = 0x7E0  # Target address (ECU)
+
+    # Messages to send
+    check_connection_data = [0x01, 0x00]  # Request data for connection check
+    reset_ecu_data = [0x11, 0x01]  # Reset ECU command (e.g., UDS reset request)
+
+    try:
+        # Initialize CAN bus
+        print(f"Initializing CAN bus on channel '{can_channel}' with bitrate {can_bitrate}...")
+        can_bus = can.interface.Bus(bustype='socketcan', channel=can_channel, bitrate=can_bitrate)
+
+        # Initialize ISO-TP session
+        isotp_address = isotp.Address(isotp.AddressingMode.Normal_11bits, txid=source_address, rxid=target_address)
+        iso_session = isotp.CanStack(bus=can_bus, address=isotp_address, error_handler=print)
+
+        # Step 1: Check ECU connection
+        print("Sending ISO-TP connection check message to ECU...")
+        send_isotp_message(iso_session, check_connection_data)
+        response = receive_isotp_message(iso_session, timeout=2.0)  # Wait for response
+
+        if response:
+            print("ECU is connected and responding!")
+        else:
+            print("No response from ECU. Check connection or message format.")
+
+        # Step 2: Reset the ECU
+        print("Sending ISO-TP reset command to ECU...")
+        send_isotp_message(iso_session, reset_ecu_data)
+        response = receive_isotp_message(iso_session, timeout=2.0)
+
+        if response:
+            print("ECU reset acknowledged.")
+        else:
+            print("No acknowledgment for reset command.")
+
+    except Exception as e:
+        print(f"Error: {e}")
+    finally:
+        if 'iso_session' in locals():
+            iso_session = None
+            print("ISO-TP session terminated.")
+        if 'can_bus' in locals():
+            can_bus.shutdown()
+            print("CAN bus shut down.")
+
+
+if __name__ == "__main__":
+    main()
