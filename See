@@ -1,0 +1,147 @@
+import pandas as pd
+import can
+import time
+
+# CAN Configuration
+CAN_APP_NAME = "CANalyzer"
+CAN_CHANNEL = 1
+CAN_BITRATE = 500000
+DELAY_BETWEEN_MESSAGES = 0.1  # Optional delay in seconds between messages
+
+def setup_can_interface():
+    """
+    Configure the CAN interface for communication.
+    """
+    try:
+        bus = can.interface.Bus(
+            channel=CAN_CHANNEL,
+            bustype='vector',
+            app_name=CAN_APP_NAME,
+            bitrate=CAN_BITRATE
+        )
+        print("CAN interface configured successfully.")
+        return bus
+    except Exception as e:
+        print(f"Failed to configure CAN interface: {e}")
+        return None
+
+def parse_data(data_str):
+    """
+    Parse a string of data in the format '(0x01, 0x02, 0x04, ...)' into a byte array.
+    """
+    try:
+        # Remove parentheses and split into individual hex values
+        data_str = data_str.strip("()")
+        byte_array = bytearray(int(byte.strip(), 16) for byte in data_str.split(","))
+        return byte_array
+    except Exception as e:
+        print(f"Error parsing data: {data_str}. Error: {e}")
+        return None
+
+def format_data(byte_array):
+    """
+    Convert a byte array back to the string format '(0x01, 0x02, 0x04, ...)'.
+    """
+    return f"({', '.join(f'0x{byte:02X}' for byte in byte_array)})"
+
+def send_to_ecu(bus, txid, data):
+    """
+    Send a CAN message to the ECU and receive the response.
+    """
+    try:
+        # Create a CAN message
+        tx_msg = can.Message(
+            arbitration_id=int(txid, 16),
+            data=data,
+            is_extended_id=True  # Use Extended ID
+        )
+        bus.send(tx_msg)
+        print(f"Sent: TX ID={txid} (Extended ID), Data={format_data(data)}")
+
+        # Wait for the response (timeout set to 1 second)
+        response = bus.recv(timeout=1.0)
+
+        if response:
+            rxid = hex(response.arbitration_id)
+            rxdata = format_data(response.data)
+            print(f"Received: RX ID={rxid}, Data={rxdata}")
+            return rxid, rxdata
+        else:
+            print("No response received.")
+            return None, None
+    except Exception as e:
+        print(f"Error in CAN communication: {e}")
+        return None, None
+
+def main():
+    # User-defined column mappings
+    column_mapping = {
+        "tx_id": "TX ID",  # Column containing TX IDs to send
+        "data": "Data",  # Column containing Data to send
+        "expected_rx_id": "Expected RX ID",  # Column containing Expected RX IDs
+        "expected_rx_data": "Expected RX Data"  # Column containing Expected RX Data
+    }
+
+    # Path to Excel file
+    file_path = "communication_data.xlsx"  # Replace with your file path
+    df = pd.read_excel(file_path)
+
+    # Check if all required columns exist
+    for key, column_name in column_mapping.items():
+        if column_name not in df.columns:
+            print(f"Error: Column '{column_name}' is missing in the Excel file.")
+            return
+
+    # Setup CAN interface
+    bus = setup_can_interface()
+    if not bus:
+        return
+
+    # Iterate through rows and perform communication
+    print("\nProcessing rows from Excel sheet...\n")
+    for index, row in df.iterrows():
+        txid = row[column_mapping["tx_id"]]
+        data_str = row[column_mapping["data"]]
+        expected_rxid = row[column_mapping["expected_rx_id"]]
+        expected_rxdata = row[column_mapping["expected_rx_data"]]
+
+        # Parse the Data column into a byte array
+        data = parse_data(data_str)
+        if data is None:
+            print(f"Skipping row {index + 1} due to invalid data format.")
+            continue
+
+        # Send data to ECU and get response
+        rxid, rxdata = send_to_ecu(bus, txid, data)
+
+        # Check if Expected RX Data is empty
+        if pd.isna(expected_rxdata) or expected_rxdata == "":
+            # Fill the Expected RX Data column with received data
+            if rxid and rxdata:
+                df.at[index, column_mapping["expected_rx_data"]] = rxdata
+                print(f"Row {index + 1}: TX ID={txid}, Sent Data={format_data(data)}, Received RX ID={rxid}, Received RX Data={rxdata}")
+            else:
+                print(f"Row {index + 1}: TX ID={txid}, Sent Data={format_data(data)}, No response received.")
+        else:
+            # Compare expected and received RX Data
+            if rxid != expected_rxid or rxdata != expected_rxdata:
+                print(f"Row {index + 1}: Mismatch!")
+                print(f"  TX ID Sent: {txid}, Data Sent: {format_data(data)}")
+                print(f"  Expected RX ID: {expected_rxid}, Expected RX Data: {expected_rxdata}")
+                print(f"  Received RX ID: {rxid}, Received RX Data: {rxdata}")
+            else:
+                print(f"Row {index + 1}: TX ID={txid}, Sent Data={format_data(data)}, Received RX ID={rxid}, Data Matched!")
+
+        # Optional delay between messages
+        time.sleep(DELAY_BETWEEN_MESSAGES)
+
+    # Save the updated Excel file
+    updated_file_path = "updated_communication_data.xlsx"
+    df.to_excel(updated_file_path, index=False)
+    print(f"\nUpdated Excel file saved as '{updated_file_path}'.")
+
+    # Close the CAN interface
+    bus.shutdown()
+
+if __name__ == "__main__":
+    main()
