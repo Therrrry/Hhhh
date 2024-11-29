@@ -1,0 +1,90 @@
+import can
+import logging
+import time
+
+
+class ECUCommunication:
+    def __init__(self, channel=1, bitrate=500000, p2server_max=50):
+        """
+        Initialize ECU communication over CAN using Vector driver for CANalyzer.
+        """
+        self.channel = channel
+        self.bitrate = bitrate
+        self.p2server_max = p2server_max  # Maximum waiting time for ECU response
+        self.bus = None
+        logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
+
+    def connect(self):
+        """
+        Connect to the CAN bus using Vector driver.
+        """
+        try:
+            # Vector driver initialization
+            self.bus = can.interface.Bus(channel=self.channel, bustype='vector', bitrate=self.bitrate)
+            logging.info(f"Connected to CANalyzer on channel {self.channel} with bitrate {self.bitrate}.")
+        except Exception as e:
+            logging.error(f"Failed to connect to CANalyzer: {e}")
+            self.bus = None
+
+    def send_message(self, arbitration_id, data):
+        """
+        Send a message to the ECU over CAN.
+        """
+        if not self.bus:
+            logging.error("CANalyzer is not connected.")
+            return False
+
+        try:
+            msg = can.Message(arbitration_id=arbitration_id, data=data, is_extended_id=True)
+            self.bus.send(msg)
+            logging.info(f"Message sent: ID={hex(arbitration_id)}, Data={data}")
+            return True
+        except can.CanError as e:
+            logging.error(f"Failed to send message: {e}")
+            return False
+
+    def get_response(self, arbitration_id):
+        """
+        Wait for a response from the ECU with P2Server_MAX timeout.
+        """
+        if not self.bus:
+            logging.error("CANalyzer is not connected.")
+            return None
+
+        start_time = time.time()
+        while True:
+            try:
+                msg = self.bus.recv(timeout=0.1)  # Polling the CAN bus
+                if msg and msg.arbitration_id == arbitration_id:
+                    logging.info(f"Response received: ID={hex(msg.arbitration_id)}, Data={list(msg.data)}")
+                    return list(msg.data)
+            except can.CanError as e:
+                logging.error(f"Error receiving CAN message: {e}")
+                return None
+
+            if time.time() - start_time > self.p2server_max:
+                logging.warning(f"No response received within P2Server_MAX ({self.p2server_max} seconds).")
+                return None
+
+
+def main():
+    # Define the target arbitration ID and data
+    arbitration_id = 0x18DA03FA  # ECU request ID
+    data = [0x02, 0x10, 0x01]  # Diagnostic Session Control request
+
+    # Create an ECU communication instance
+    ecu_comm = ECUCommunication(channel=1, bitrate=500000, p2server_max=50)
+
+    # Connect to the CAN bus
+    ecu_comm.connect()
+
+    # Send a message to the ECU
+    if ecu_comm.send_message(arbitration_id, data):
+        # Retrieve and print the ECU response
+        ecu_comm.get_response(arbitration_id)
+    else:
+        logging.error("Message sending failed. Check CANalyzer connection.")
+
+
+if __name__ == "__main__":
+    main()
