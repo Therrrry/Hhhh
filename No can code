@@ -1,0 +1,106 @@
+import serial
+import time
+
+
+class CANalyzerCommunication:
+    def __init__(self, com_port, baud_rate=500000, timeout=1, p2server_max=50):
+        """
+        Initialize the CANalyzer communication.
+        :param com_port: COM port for CANalyzer (e.g., 'COM3').
+        :param baud_rate: Baud rate for CAN communication (default 500000).
+        :param timeout: Serial communication timeout (default 1 second).
+        :param p2server_max: Maximum wait time for response (in seconds).
+        """
+        self.com_port = com_port
+        self.baud_rate = baud_rate
+        self.timeout = timeout
+        self.p2server_max = p2server_max
+        self.connection = None
+
+    def connect(self):
+        """Establish a connection to CANalyzer."""
+        try:
+            self.connection = serial.Serial(
+                port=self.com_port,
+                baudrate=self.baud_rate,
+                timeout=self.timeout,
+            )
+            print(f"Connected to CANalyzer on {self.com_port} at {self.baud_rate} baud.")
+        except Exception as e:
+            print(f"Error connecting to CANalyzer: {e}")
+
+    def send_message(self, arbitration_id, data):
+        """
+        Send a CAN message to the ECU.
+        :param arbitration_id: CAN arbitration ID (integer).
+        :param data: List of data bytes to send (e.g., [0x02, 0x10, 0x01]).
+        """
+        if not self.connection or not self.connection.is_open:
+            print("Connection to CANalyzer is not open.")
+            return False
+
+        try:
+            # Construct the message frame (ID#DATA)
+            message = f"{arbitration_id:08X}#{''.join(f'{byte:02X}' for byte in data)}\r\n"
+            self.connection.write(message.encode())
+            print(f"Message sent: {message.strip()}")
+            return True
+        except Exception as e:
+            print(f"Error sending CAN message: {e}")
+            return False
+
+    def get_response(self):
+        """
+        Wait for a response from the CANalyzer.
+        :return: Raw response string or None if no response is received.
+        """
+        if not self.connection or not self.connection.is_open:
+            print("Connection to CANalyzer is not open.")
+            return None
+
+        start_time = time.time()
+        while time.time() - start_time <= self.p2server_max:
+            try:
+                # Read the response line from CANalyzer
+                response = self.connection.readline().decode().strip()
+                if response:
+                    print(f"Response received: {response}")
+                    return response
+            except Exception as e:
+                print(f"Error receiving CAN message: {e}")
+                return None
+
+        print(f"No response received within P2Server_MAX ({self.p2server_max} seconds).")
+        return None
+
+    def close(self):
+        """Close the connection to CANalyzer."""
+        if self.connection and self.connection.is_open:
+            self.connection.close()
+            print("Connection to CANalyzer closed.")
+
+
+# Example Usage
+if __name__ == "__main__":
+    # Define your COM port
+    COM_PORT = "COM3"  # Replace with the actual COM port
+
+    # Arbitration ID and data for sending the message
+    ARBITRATION_ID = 0x18DA03FA
+    DATA = [0x02, 0x10, 0x01]  # Diagnostic Session Control request
+
+    # Create a CANalyzerCommunication instance
+    can_comm = CANalyzerCommunication(COM_PORT, baud_rate=500000, timeout=1, p2server_max=50)
+
+    # Connect to the CANalyzer
+    can_comm.connect()
+
+    # Send the diagnostic session control message
+    if can_comm.send_message(ARBITRATION_ID, DATA):
+        # Wait for any response
+        response = can_comm.get_response()
+    else:
+        print("Failed to send CAN message.")
+
+    # Close the connection
+    can_comm.close()
