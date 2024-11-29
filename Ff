@@ -1,0 +1,53 @@
+class SimulatedCANalyzer:
+    def __init__(self):
+        # Dictionary to simulate message storage
+        self.messages = {}
+
+    def send_message(self, arbitration_id, data):
+        """
+        Simulates sending a CAN message.
+        """
+        print(f"Sending message with ID: {hex(arbitration_id)}, Data: {data}")
+        # Store the message in the simulation storage
+        self.messages[arbitration_id] = data
+
+    def receive_message(self, arbitration_id):
+        """
+        Simulates receiving a CAN message.
+        """
+        print(f"Waiting for response to ID: {hex(arbitration_id)}...")
+        # Check if the message exists in the storage
+        if arbitration_id in self.messages:
+            # Create a simulated response
+            response = [0x02, 0x50, 0x01]  # Mocked response data
+            print(f"Received response for ID {hex(arbitration_id)}: {response}")
+            return {
+                "ID": arbitration_id,
+                "Data": response
+            }
+        else:
+            print(f"No response for ID: {hex(arbitration_id)}.")
+            return None
+
+def main():
+    # Define arbitration ID and data to send
+    arbitration_id = 0x18DA03FA
+    data_to_send = [0x02, 0x10, 0x01]
+
+    # Initialize the Simulated CANalyzer
+    canalyzer = SimulatedCANalyzer()
+
+    # Simulate sending a message
+    canalyzer.send_message(arbitration_id, data_to_send)
+
+    # Simulate receiving a response
+    response = canalyzer.receive_message(arbitration_id)
+
+    # Display the result
+    if response:
+        print(f"Response received: ID={hex(response['ID'])}, Data={response['Data']}")
+    else:
+        print("No response received.")
+
+if __name__ == "__main__":
+    main()
