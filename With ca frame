@@ -1,0 +1,55 @@
+#!/usr/bin/env python
+
+"""
+This script constructs a proper CAN frame for extended ID and sends the message using a Vector CANalyzer interface.
+It listens for any response.
+"""
+
+import can
+
+def construct_frame(arbitration_id, data, extended_id=True):
+    """Constructs a CAN message with the proper frame format."""
+    if len(data) > 8:
+        raise ValueError("CAN data payload cannot exceed 8 bytes.")
+
+    msg = can.Message(
+        arbitration_id=arbitration_id,
+        data=data,
+        is_extended_id=extended_id
+    )
+    return msg
+
+def send_and_receive():
+    """Sends a properly formatted CAN message and listens for any response."""
+
+    # Configure the CAN bus interface for Vector CANalyzer
+    bus = can.Bus(interface="vector", app_name="CANalyzer", channel=0, bitrate=500000)
+
+    # Construct the CAN frame
+    arbitration_id = 0x18DA03FA  # Extended ID
+    data = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]  # Example data
+    msg = construct_frame(arbitration_id, data, extended_id=True)
+
+    # Send the message
+    try:
+        bus.send(msg)
+        print(f"Message sent: {msg}")
+    except can.CanError:
+        print("Message NOT sent")
+        return
+
+    print("Waiting for any response...")
+
+    # Listen for any responses
+    try:
+        while True:
+            response = bus.recv(1)  # Timeout in seconds
+            if response is not None:
+                print(f"Received message: {response}")
+    except KeyboardInterrupt:
+        print("Stopped by user")
+    finally:
+        bus.shutdown()
+
+if __name__ == "__main__":
+    send_and_receive()
