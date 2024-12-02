@@ -1,0 +1,74 @@
+#!/usr/bin/env python
+
+"""
+This script constructs a proper CAN frame for extended ID and sends the message using a Vector CANalyzer interface.
+It sends the message exactly 60 times (once per second) with TX ID 0x18DA03FA and waits for the corresponding RX ID 0x18DAFA03.
+"""
+
+import can
+import time
+
+def construct_frame(arbitration_id, data, extended_id=True):
+    """Constructs a CAN message with the proper frame format."""
+    if len(data) > 8:
+        raise ValueError("CAN data payload cannot exceed 8 bytes.")
+
+    msg = can.Message(
+        arbitration_id=arbitration_id,
+        data=data,
+        is_extended_id=extended_id
+    )
+    return msg
+
+def send_and_receive():
+    """Sends a properly formatted CAN message 60 times, once per second, and listens for corresponding responses."""
+
+    # Configure the CAN bus interface for Vector CANalyzer
+    bus = can.Bus(interface="vector", app_name="CANalyzer", channel=0, bitrate=500000)
+
+    # TX and RX arbitration IDs
+    tx_id = 0x18DA03FA  # Transmit ID
+    rx_id = 0x18DAFA03  # Expected Receive ID
+
+    # Data to send
+    data = [0x02, 0x10, 0x01]
+
+    # Construct the CAN frame
+    msg = construct_frame(tx_id, data, extended_id=True)
+
+    try:
+        for i in range(60):  # Loop exactly 60 times
+            # Send the CAN message
+            try:
+                bus.send(msg)
+                print(f"Message {i + 1}/60 sent: TX ID=0x{tx_id:08X}, Data={msg.data}")
+            except can.CanError:
+                print(f"Message {i + 1}/60 NOT sent")
+                time.sleep(1)  # Wait before retrying the next message
+                continue
+
+            # Wait for the corresponding RX ID response
+            try:
+                start_time = time.time()
+                while True:
+                    response = bus.recv(timeout=0.1)  # Check for response every 100ms
+                    if response and response.arbitration_id == rx_id:
+                        print(f"Received response: RX ID=0x{response.arbitration_id:08X}, Data={list(response.data)}")
+                        break
+                    elif time.time() - start_time > 1:
+                        print("No response received within 1 second.")
+                        break
+            except Exception as e:
+                print(f"Error while receiving: {e}")
+
+            # Wait for the remaining time in the second
+            time.sleep(max(0, 1 - (time.time() - start_time)))
+
+        print("Message transmission completed: Sent 60 messages.")
+    except KeyboardInterrupt:
+        print("Stopped by user")
+    finally:
+        bus.shutdown()
+
+if __name__ == "__main__":
+    send_and_receive()
