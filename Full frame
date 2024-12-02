@@ -1,0 +1,139 @@
+#!/usr/bin/env python
+
+"""
+Constructs a proper CAN frame in compliance with the CAN protocol and sends it using a Vector CANalyzer interface.
+"""
+
+import can
+
+def construct_can_frame(arbitration_id, data, extended_id=True):
+    """
+    Constructs a complete CAN frame in binary representation.
+
+    :param arbitration_id: The identifier (standard or extended).
+    :param data: The data payload (max 8 bytes).
+    :param extended_id: True for extended CAN frame (29-bit identifier).
+    :return: Dictionary representation of CAN frame fields and full binary frame.
+    """
+    if len(data) > 8:
+        raise ValueError("CAN data payload cannot exceed 8 bytes.")
+
+    # SOF
+    sof = "0"  # Start of Frame is always dominant (0)
+    
+    # Identifier
+    if extended_id:
+        identifier = f"{arbitration_id:029b}"  # 29-bit extended ID
+    else:
+        identifier = f"{arbitration_id:011b}"  # 11-bit standard ID
+    
+    # RTR, IDE, and Reserved bits
+    rtr = "0"  # Data frame (0 for data, 1 for remote request)
+    ide = "1" if extended_id else "0"  # 1 for extended ID, 0 for standard
+    reserved = "0"  # Reserved bit, always dominant
+    
+    # DLC (4 bits)
+    dlc = f"{len(data):04b}"  # Data length code in binary
+    
+    # Data field
+    data_field = "".join(f"{byte:08b}" for byte in data)  # Convert each byte to 8-bit binary
+    
+    # CRC (dummy CRC calculation; hardware typically calculates this)
+    crc_placeholder = "0" * 15  # Placeholder for CRC value (15 bits)
+    crc_delimiter = "1"  # CRC delimiter
+    
+    # ACK (2 bits)
+    ack_slot = "1"  # Acknowledgment slot (recessive, waiting for dominant from receiver)
+    ack_delimiter = "1"  # ACK delimiter
+    
+    # EOF
+    eof = "1" * 7  # End of Frame (7 recessive bits)
+    
+    # ITM and Bus Idle
+    itm = "1" * 3  # Intermission (3 recessive bits)
+    bus_idle = "1" * 8  # Example 8 recessive bits for bus idle
+    
+    # Combine all fields into the full CAN frame
+    full_frame = (
+        sof +
+        identifier +
+        rtr +
+        ide +
+        reserved +
+        dlc +
+        data_field +
+        crc_placeholder +
+        crc_delimiter +
+        ack_slot +
+        ack_delimiter +
+        eof +
+        itm +
+        bus_idle
+    )
+
+    return {
+        "frame_binary": full_frame,
+        "fields": {
+            "SOF": sof,
+            "Identifier": identifier,
+            "RTR": rtr,
+            "IDE": ide,
+            "Reserved": reserved,
+            "DLC": dlc,
+            "Data": data_field,
+            "CRC": crc_placeholder,
+            "CRC Delimiter": crc_delimiter,
+            "ACK": ack_slot + ack_delimiter,
+            "EOF": eof,
+            "ITM": itm,
+            "Bus Idle": bus_idle,
+        }
+    }
+
+def send_and_receive():
+    """Sends a properly formatted CAN message and listens for any response."""
+
+    # Configure the CAN bus interface for Vector CANalyzer
+    bus = can.Bus(interface="vector", app_name="CANalyzer", channel=0, bitrate=500000)
+
+    # Construct the CAN frame
+    arbitration_id = 0x18DA03FA  # Extended ID
+    data = [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]  # Example data payload
+    frame = construct_can_frame(arbitration_id, data, extended_id=True)
+
+    # Print the constructed frame details
+    print("Constructed CAN Frame:")
+    for field, value in frame["fields"].items():
+        print(f"{field}: {value}")
+    print(f"Full Frame (Binary): {frame['frame_binary']}")
+    print(f"Frame Length: {len(frame['frame_binary'])} bits")
+
+    # Send the CAN message using python-can
+    msg = can.Message(
+        arbitration_id=arbitration_id,
+        data=data,
+        is_extended_id=True
+    )
+
+    try:
+        bus.send(msg)
+        print(f"Message sent: {msg}")
+    except can.CanError:
+        print("Message NOT sent")
+        return
+
+    print("Waiting for any response...")
+
+    # Listen for any responses
+    try:
+        while True:
+            response = bus.recv(1)  # Timeout in seconds
+            if response is not None:
+                print(f"Received message: {response}")
+    except KeyboardInterrupt:
+        print("Stopped by user")
+    finally:
+        bus.shutdown()
+
+if __name__ == "__main__":
+    send_and_receive()
