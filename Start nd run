@@ -1,0 +1,64 @@
+import can
+import time
+
+# Setup the CAN bus
+bus = can.interface.Bus(
+    channel=0,  # Channel to use
+    bustype="vector",  # Vector hardware
+    bitrate=250000  # Baud rate
+)
+
+# Arbitration ID and message details
+arbitration_id = 0x18DA03FA
+extended_id = True
+
+# Function to receive a message from the ECU
+def receive_from_ecu(timeout=5):
+    print("Listening for messages...")
+    try:
+        message = bus.recv(timeout)  # Listen with a timeout
+        if message:
+            print(f"Received Message: {message}")
+            return message
+        else:
+            print("No message received within the timeout period.")
+            return None
+    except Exception as e:
+        print(f"Error while receiving: {e}")
+        return None
+
+# Function to send a message to the ECU
+def send_to_ecu(data):
+    print("Sending message to ECU...")
+    try:
+        message = can.Message(
+            arbitration_id=arbitration_id,
+            data=data,
+            is_extended_id=extended_id
+        )
+        bus.send(message)
+        print(f"Sent Message: {message}")
+    except can.CanError as e:
+        print(f"Error while sending: {e}")
+
+# Main workflow
+def main():
+    # Receive initial message from the ECU
+    received_message = receive_from_ecu()
+    
+    if received_message:
+        # Prepare a response message
+        data_to_send = [0x02, 0x10, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00]  # Example CAN data
+        
+        # Send the message to the ECU
+        send_to_ecu(data_to_send)
+        
+        # Record the ECU's response
+        response = receive_from_ecu()
+        if response:
+            print(f"Response from ECU: {response}")
+        else:
+            print("No response from ECU after sending the message.")
+
+if __name__ == "__main__":
+    main()
