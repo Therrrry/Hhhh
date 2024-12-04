@@ -1,0 +1,98 @@
+import can
+import time
+
+# CAN bus configuration
+bus = can.interface.Bus(channel='can0', bustype='vector', app_name='CANalyzer', bitrate=500000)
+
+# Arbitration ID and extended ID
+ARB_ID = 0x18DA03FA
+EXTENDED_ID = True
+
+def log_message(message):
+    print(f"[LOG] {message}")
+
+def send_can_message(data):
+    msg = can.Message(arbitration_id=ARB_ID, data=data, is_extended_id=EXTENDED_ID)
+    try:
+        bus.send(msg)
+        log_message(f"Sent: {msg}")
+    except can.CanError as e:
+        log_message(f"CAN Send Error: {e}")
+
+def change_session(session):
+    sessions = {
+        "1": [0x10, 0x01],  # Default session
+        "2": [0x10, 0x02],  # Programming session
+        "3": [0x10, 0x03],  # Extended session
+        "4": [0x10, 0x04],  # Safety session
+    }
+    if session in sessions:
+        log_message(f"Changing to session {session}")
+        send_can_message(sessions[session])
+        time.sleep(0.1)  # Wait for ECU response
+        log_message("Session changed successfully")
+    else:
+        log_message("Invalid session selected")
+
+def security_unlock():
+    # Request seed
+    send_can_message([0x27, 0x01])
+    time.sleep(0.1)  # Wait for response
+    log_message("Received seed (mocked here, replace with actual response)")
+    seed = [0x12, 0x34]  # Replace with actual seed from ECU
+
+    # Calculate key (replace with actual algorithm)
+    key = [0x56, 0x78]  # Replace with actual key calculation
+    send_can_message([0x27, 0x02] + key)
+    time.sleep(0.1)  # Wait for response
+    log_message("Security unlocked successfully")
+
+def read_did():
+    log_message("Reading DID: 0xF206")
+    send_can_message([0x22, 0xF2, 0x06])
+    time.sleep(0.1)  # Wait for response
+    log_message("DID 0xF206 read successfully")
+
+def write_did():
+    log_message("Writing to DID: 0xF206 with data [0xA5, 0x5A, 0x9C, 0xC9]")
+    send_can_message([0x2E, 0xF2, 0x06, 0xA5, 0x5A, 0x9C, 0xC9])
+    time.sleep(0.1)  # Wait for response
+    log_message("DID 0xF206 written successfully")
+
+def hard_reset():
+    log_message("Performing hard reset")
+    send_can_message([0x11, 0x01])
+    time.sleep(0.1)  # Wait for response
+    log_message("Hard reset performed successfully")
+
+# Main workflow
+def main():
+    log_message("ECU Communication Started")
+    while True:
+        log_message("Select session: 1) Default 2) Programming 3) Extended 4) Safety")
+        session = input("Enter session number: ")
+        change_session(session)
+
+        security_unlock()
+
+        read_did()
+
+        write_did()
+
+        hard_reset()
+
+        log_message("Repeating session change and security unlock...")
+        change_session(session)
+        security_unlock()
+        read_did()
+
+        log_message("Process complete. Exiting.")
+        break
+
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        log_message("Exiting ECU Communication")
+    finally:
+        bus.shutdown()
