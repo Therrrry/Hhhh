@@ -1,0 +1,190 @@
+import time
+import can
+
+###############################################
+# Configuration Parameters
+###############################################
+BITRATE = 250000
+CHANNEL = 0
+INTERFACE = 'vector'   # 'vector' for Vector hardware
+APP_NAME = 'CANalyzer' # or 'CANape', depends on your setup
+
+# The given arbitration IDs:
+# Tester to ECU: 0x18DAFA03
+# ECU to Tester: 0x18DA03FA
+REQUEST_ID = 0x18DAFA03  # Tester -> ECU
+RESPONSE_ID = 0x18DA03FA # ECU -> Tester
+EXTENDED_ID = True
+
+# UDS Service IDs
+DIAG_SESSION_CONTROL = 0x10
+SECURITY_ACCESS = 0x27
+
+# Example sub-functions (adjust as necessary)
+EXTENDED_DIAG_SESSION = 0x03  # Extended Diagnostic Session
+SECURITY_ACCESS_REQUEST_SEED = 0x01  # Request Seed
+SECURITY_ACCESS_SEND_KEY = 0x02       # Send Key
+
+###############################################
+# Seed-Key Algorithm Placeholder
+###############################################
+def derive_key_from_seed(seed_bytes):
+    """
+    Placeholder for seed-to-key calculation.
+    Replace this with the actual known algorithm for your ECU.
+    """
+    # Dummy key: must be replaced with the correct derivation logic.
+    return b'\x00\x00\x00\x00'
+
+###############################################
+# Setup CAN Bus
+###############################################
+bus = can.interface.Bus(
+    channel=CHANNEL, 
+    bustype=INTERFACE, 
+    app_name=APP_NAME, 
+    bitrate=BITRATE
+)
+
+###############################################
+# Helper Functions
+###############################################
+
+def send_isotp_single_frame(arbitration_id, payload):
+    """
+    Send a single-frame ISO-TP CAN message.
+    ISO-TP Single Frame Format:
+      Byte 0: 0x0 | length (N_PCI)
+      Next bytes: UDS data
+    If total data length is N, the first byte = 0x0N, e.g. N=2 => 0x02.
+    The rest of the CAN frame up to 8 bytes is padded with zeros.
+    """
+    length = len(payload)
+    if length > 7:
+        raise ValueError("Payload too long for single-frame ISO-TP (max 7 bytes).")
+
+    # Construct single-frame: First byte = length, followed by payload
+    data = bytearray([length]) + payload
+    # Pad up to 8 bytes
+    while len(data) < 8:
+        data.append(0x00)
+
+    msg = can.Message(arbitration_id=arbitration_id, data=data, is_extended_id=EXTENDED_ID)
+    bus.send(msg)
+
+
+def receive_isotp_single_frame(response_id, timeout=2.0):
+    """
+    Receive a single-frame ISO-TP message from the ECU.
+    Wait up to 'timeout' seconds.
+    Returns the payload bytes if a single-frame response is received, else None.
+    """
+    start_time = time.time()
+    while (time.time() - start_time) < timeout:
+        rx_msg = bus.recv(timeout=0.1)
+        if rx_msg and rx_msg.arbitration_id == response_id:
+            # Check if single-frame
+            # Byte0 (N_PCI) must have upper nibble = 0 for single frame,
+            # and the lower nibble gives length.
+            n_pci = rx_msg.data[0]
+            if (n_pci & 0xF0) == 0x00:
+                length = n_pci & 0x0F
+                uds_data = rx_msg.data[1:1+length]
+                return uds_data
+    return None
+
+
+def send_and_receive(payload, request_id=REQUEST_ID, response_id=RESPONSE_ID, timeout=2.0):
+    """
+    Send a single-frame ISO-TP message to the ECU and wait for a single-frame response.
+    """
+    send_isotp_single_frame(request_id, payload)
+    return receive_isotp_single_frame(response_id, timeout=timeout)
+
+
+###############################################
+# UDS Procedures
+###############################################
+def request_diagnostic_session(session_type=EXTENDED_DIAG_SESSION):
+    """
+    Send a Diagnostic Session Control request: 0x10, <session_type>
+    Payload: [0x10, session_type]
+    """
+    request_payload = bytes([DIAG_SESSION_CONTROL, session_type])
+    print("Requesting Extended Diagnostic Session...")
+    response = send_and_receive(request_payload)
+    if response:
+        # Positive response to 0x10 is 0x50, indicating success
+        if response[0] == (DIAG_SESSION_CONTROL + 0x40):
+            print("Entered Extended Diagnostic Session successfully.")
+            print("Session response data:", response.hex())
+            return True
+        else:
+            print("Negative response to session request:", response.hex())
+    else:
+        print("No response from ECU for session request.")
+    return False
+
+
+def request_security_seed(level=SECURITY_ACCESS_REQUEST_SEED):
+    """
+    Request the security seed:
+    Payload: [0x27, 0x01] for requesting the seed.
+    """
+    request_payload = bytes([SECURITY_ACCESS, level])
+    print("Requesting Security Seed...")
+    response = send_and_receive(request_payload)
+    if response:
+        # Positive response to Security Access (0x27) is 0x67.
+        # The sub-function returned should be level+0x40 (e.g. 0x41 if 0x01 requested)
+        if response[0] == (SECURITY_ACCESS + 0x40) and response[1] == (level + 0x40):
+            seed = response[2:]  # The rest are seed bytes
+            print("Received seed:", seed.hex())
+            return seed
+        else:
+            print("Negative or incorrect seed response:", response.hex())
+    else:
+        print("No response from ECU for security seed request.")
+    return None
+
+
+def send_security_key(key_bytes, level=SECURITY_ACCESS_SEND_KEY):
+    """
+    Send the derived key to the ECU:
+    Payload: [0x27, 0x02, key...]
+    """
+    request_payload = bytes([SECURITY_ACCESS, level]) + key_bytes
+    print("Sending Security Key:", key_bytes.hex())
+    response = send_and_receive(request_payload)
+    if response:
+        # Positive response should be 0x67 and sub-func+0x40 again
+        if response[0] == (SECURITY_ACCESS + 0x40) and response[1] == (level + 0x40):
+            print("Security Access Granted!")
+            return True
+        else:
+            print("Failed to unlock security. Negative response:", response.hex())
+    else:
+        print("No response from ECU after sending key.")
+    return False
+
+###############################################
+# Main Logic
+###############################################
+if __name__ == "__main__":
+    # 1. Enter Extended Diagnostic Session
+    if not request_diagnostic_session():
+        exit("Failed to enter extended diagnostic session.")
+
+    # 2. Request Security Seed
+    seed = request_security_seed()
+    if seed is None:
+        exit("Failed to obtain security seed from ECU.")
+
+    # 3. Derive Key From Seed (Placeholder)
+    key = derive_key_from_seed(seed)
+
+    # 4. Send the Key to Unlock
+    if send_security_key(key):
+        print("ECU Security successfully unlocked.")
+    else:
+        print("ECU Security unlock attempt failed.")
