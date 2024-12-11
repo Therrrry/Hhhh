@@ -1,0 +1,140 @@
+import itertools
+import can
+import time
+
+def choose_values_for_byte(byte_index, predefined_values):
+    """
+    Ask the user how they want to select values from the predefined_values array for this byte.
+    The user can:
+    - Choose a single value by array index
+    - Use the full predefined array
+    - Use a partial subset (by specifying start and end indices)
+
+    Returns a list of integers representing the chosen values for this byte.
+    """
+    # Show the predefined values
+    print(f"\nByte {byte_index+1} has the following predefined values:")
+    for i, val in enumerate(predefined_values):
+        print(f"  Index {i}: 0x{val:02X}")
+
+    while True:
+        print("\nHow do you want to choose values for this byte?")
+        print("  1) Single Value (choose one index)")
+        print("  2) Full Array (use all predefined values)")
+        print("  3) Partial Range (choose a start and end index from the array)")
+        choice = input("Select option (1/2/3): ").strip()
+
+        if choice == '1':
+            idx_str = input("Enter the index of the single value you want to use: ").strip()
+            if idx_str.isdigit():
+                idx = int(idx_str)
+                if 0 <= idx < len(predefined_values):
+                    return [predefined_values[idx]]
+                else:
+                    print("Index out of range.")
+            else:
+                print("Invalid index. Please enter a numeric index.")
+
+        elif choice == '2':
+            # Full array
+            return predefined_values[:]
+
+        elif choice == '3':
+            start_str = input("Enter start index: ").strip()
+            end_str = input("Enter end index: ").strip()
+            if start_str.isdigit() and end_str.isdigit():
+                start_val = int(start_str)
+                end_val = int(end_str)
+                if 0 <= start_val <= end_val < len(predefined_values):
+                    return predefined_values[start_val:end_val+1]
+                else:
+                    print("Invalid range. Indices must be within the array bounds.")
+            else:
+                print("Invalid indices. Please enter numeric values.")
+        else:
+            print("Invalid choice. Please choose 1, 2, or 3.")
+
+
+def main():
+    # ------------------------------------------------------------
+    # CAN Configuration
+    # ------------------------------------------------------------
+    bus = can.ThreadSafeBus(channel='can0', interface='socketcan', bitrate=500000)
+    asc_filename = "can_log.asc"
+    writer = can.ASCWriter(asc_filename)
+
+    # Example extended CAN ID, change as needed
+    request_id = 0x18FFFFF0
+    is_extended_id = True
+
+    # ------------------------------------------------------------
+    # Predefined Values for Each of the 8 Bytes
+    # Adjust these arrays as per your project's requirement.
+    byte_values_options = [
+        [0x01],                             # Byte 1: Only one possible value
+        list(range(0x00, 0x40)),            # Byte 2: Values from 0x00 to 0x3F (64 values)
+        [0x10, 0x11, 0x12, 0x13, 0x14, 
+         0x15, 0x16, 0x17],                 # Byte 3: 8 values
+        [0xA0, 0xA1, 0xA2],                 # Byte 4: 3 values
+        [0x00],                             # Byte 5: Only 0x00
+        [0x00],                             # Byte 6: Only 0x00
+        [0x00],                             # Byte 7: Only 0x00
+        [0x00]                              # Byte 8: Only 0x00
+    ]
+
+    print("Configure each of the 8 bytes for the CAN message from predefined arrays.")
+    chosen_values_for_each_byte = []
+    for i in range(8):
+        chosen_values = choose_values_for_byte(i, byte_values_options[i])
+        chosen_values_for_each_byte.append(chosen_values)
+
+    # Create all combinations
+    all_combinations = itertools.product(*chosen_values_for_each_byte)
+
+    # ------------------------------------------------------------
+    # Logging Start
+    # ------------------------------------------------------------
+    writer.start()
+
+    # ------------------------------------------------------------
+    # Sending and Receiving Messages
+    # ------------------------------------------------------------
+    try:
+        for combo in all_combinations:
+            # combo is a tuple of length 8, each is a chosen value for that byte
+            msg_data = list(combo)
+
+            msg = can.Message(
+                arbitration_id=request_id,
+                data=msg_data,
+                is_extended_id=is_extended_id
+            )
+
+            try:
+                bus.send(msg)
+                writer.on_message_received(msg)
+                print(f"Sent: ID={hex(request_id)} Data={[hex(d) for d in msg_data]}")
+            except can.CanError as e:
+                print(f"Error sending message: {e}")
+                continue
+
+            # Optional: Attempt to read a response
+            # Adjust timeout and filtering logic as needed.
+            start_time = time.time()
+            timeout = 0.5
+            while time.time() - start_time < timeout:
+                response = bus.recv(timeout=0.1)
+                if response is not None:
+                    writer.on_message_received(response)
+                    print(f"Received: ID={hex(response.arbitration_id)} Data={[hex(d) for d in response.data]}")
+                    # If a specific response is expected per message, add logic here.
+                    break
+
+    finally:
+        writer.stop()
+        bus.shutdown()
+        print(f"Logging complete. Output saved to {asc_filename}")
+
+
+if __name__ == "__main__":
+    main()
