@@ -1,0 +1,496 @@
+import itertools
+import can
+import time
+import tkinter as tk
+from tkinter import ttk, messagebox
+
+# ------------------------------------------------------------
+# Configuration and Globals
+# ------------------------------------------------------------
+channel = 'can0'
+interface = 'socketcan'
+bitrate = 500000
+
+request_id = 0x18FFFFF0
+expected_response_id = 0x18FFFFF1  # Modify as needed
+is_extended_id = True
+
+asc_filename = "can_log.asc"
+
+send_timeout = 1.0
+recv_timeout = 0.5
+recv_poll_interval = 0.1
+
+# Predefined values for each of the 8 Bytes
+byte1_values = [0x01]
+byte2_values = [
+    0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+    0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+    0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+    0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+    0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27
+]
+byte3_values = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17]
+byte4_values = [0xA0, 0xA1, 0xA2]
+byte5_values = [0x00]
+byte6_values = [0x00]
+byte7_values = [0x00]
+byte8_values = [0x00]
+
+all_bytes_values = [
+    byte1_values,
+    byte2_values,
+    byte3_values,
+    byte4_values,
+    byte5_values,
+    byte6_values,
+    byte7_values,
+    byte8_values
+]
+
+def parse_hex_id(input_str):
+    try:
+        val = int(input_str, 16)
+        return val
+    except ValueError:
+        return None
+
+def matches_pattern(response_bytes, pattern):
+    for rb, pb in zip(response_bytes, pattern):
+        if pb != 0xFF and rb != pb:
+            return False
+    return True
+
+class App(tk.Tk):
+    def __init__(self):
+        super().__init__()
+        self.title("CAN Automation GUI")
+        self.geometry("900x700")
+
+        # App State
+        self.filtered_values = [all_bytes_values[0]]  # Byte 1 is fixed
+        self.current_byte_index = 1  # Start from byte 2
+        self.responses_list = []
+        self.byte_ranges = []  # store chosen configs for each byte
+
+        container = ttk.Frame(self)
+        container.pack(fill='both', expand=True)
+
+        # Register all frames
+        for F in (StartFrame, ByteConfigFrame, SendingFrame, SearchMenuFrame, 
+                  SearchDataFrame, SearchIDFrame, SearchBothFrame, ResultsFrame):
+            frame = F(container, self)
+            self.frames[F] = frame
+            frame.grid(row=0, column=0, sticky="nsew")
+
+        # Start at StartFrame
+        self.show_frame(StartFrame)
+
+    def show_frame(self, frame_class):
+        frame = self.frames[frame_class]
+        frame.tkraise()
+
+    def setup_can(self):
+        try:
+            self.bus = can.ThreadSafeBus(channel=channel, interface=interface, bitrate=bitrate)
+            self.writer = can.ASCWriter(asc_filename)
+        except Exception as e:
+            messagebox.showerror("CAN Setup Error", f"Failed to set up CAN bus: {e}")
+            self.destroy()
+
+    def teardown_can(self):
+        if hasattr(self, 'bus') and self.bus:
+            self.bus.shutdown()
+        if hasattr(self, 'writer') and self.writer:
+            del self.writer
+
+    def send_and_receive_for_byte(self, byte_index, byte_values):
+        """
+        Sends all messages for a specific byte's configuration.
+        Only the current byte varies; others are fixed.
+        """
+        # Prepare fixed data for other bytes
+        fixed_data = [0x00] * 8
+        fixed_data[0] = byte1_values[0]  # Byte 1 is fixed
+
+        # Update fixed_data with previously configured bytes
+        for i in range(1, byte_index):
+            fixed_data[i] = self.filtered_values[i]
+
+        # Iterate over the current byte's values
+        for val in byte_values:
+            msg_data = fixed_data.copy()
+            msg_data[byte_index] = val
+
+            tx_msg = can.Message(
+                arbitration_id=request_id,
+                data=msg_data,
+                is_extended_id=is_extended_id
+            )
+
+            try:
+                self.bus.send(tx_msg, timeout=send_timeout)
+                self.writer.on_message_received(tx_msg)
+                print(f"Sent: TX_ID={hex(request_id)} TX_Data={[hex(d) for d in msg_data]}")
+            except can.CanError as e:
+                print(f"Error sending message: {e}")
+                # Handle queue full error
+                if "xlCanTransmit failed (XL_ERR_QUEUE_IS_FULL)" in str(e):
+                    print("Queue is full. Retrying after delay...")
+                    time.sleep(0.05)
+                    try:
+                        self.bus.send(tx_msg, timeout=send_timeout)
+                        self.writer.on_message_received(tx_msg)
+                        print(f"Sent after retry: TX_ID={hex(request_id)} TX_Data={[hex(d) for d in msg_data]}")
+                    except Exception as e_retry:
+                        print(f"Retry failed: {e_retry}")
+                        continue
+                else:
+                    continue
+
+            # Add a small delay to prevent queue overflows
+            time.sleep(0.01)
+
+            # Attempt to receive a corresponding response
+            start_time = time.time()
+            while time.time() - start_time < recv_timeout:
+                try:
+                    response = self.bus.recv(timeout=recv_poll_interval)
+                    if response is not None and response.arbitration_id == expected_response_id:
+                        self.writer.on_message_received(response)
+                        r_data = tuple(response.data)
+                        print(f"Received: RX_ID={hex(response.arbitration_id)} RX_Data={[hex(d) for d in response.data]}")
+                        self.responses_list.append({
+                            'tx_id': request_id,
+                            'tx_data': tuple(msg_data),
+                            'rx_id': response.arbitration_id,
+                            'rx_data': r_data
+                        })
+                        break
+                except Exception as e_recv:
+                    print(f"Error receiving message: {e_recv}")
+                    break
+
+    def search_responses_by_data(self, pattern):
+        return [r for r in self.responses_list if matches_pattern(r['rx_data'], pattern)]
+
+    def search_responses_by_id(self, rx_id):
+        return [r for r in self.responses_list if r['rx_id'] == rx_id]
+
+    def search_responses_by_both(self, rx_id, pattern):
+        return [r for r in self.responses_list if r['rx_id'] == rx_id and matches_pattern(r['rx_data'], pattern)]
+
+
+class BaseFrame(ttk.Frame):
+    def __init__(self, parent, controller):
+        super().__init__(parent)
+        self.controller = controller
+
+    def add_nav_buttons(self, back_command=None, exit_command=None):
+        btn_frame = ttk.Frame(self)
+        btn_frame.pack(side='bottom', fill='x', pady=10)
+        back_btn = ttk.Button(btn_frame, text="Back", command=back_command, state='normal' if back_command else 'disabled')
+        back_btn.pack(side='left', padx=5)
+        exit_btn = ttk.Button(btn_frame, text="Exit", command=exit_command if exit_command else self.exit_app)
+        exit_btn.pack(side='right', padx=5)
+
+    def exit_app(self):
+        if messagebox.askokcancel("Exit", "Do you really want to exit?"):
+            self.controller.teardown_can()
+            self.controller.destroy()
+
+
+class StartFrame(BaseFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, controller)
+
+        ttk.Label(self, text="CAN Automation GUI", font=("Arial", 24)).pack(pady=30)
+        ttk.Label(self, text="Configure each byte for sending CAN messages to the ECU.").pack(pady=10)
+        ttk.Label(self, text="Press 'Next' to begin.").pack(pady=10)
+
+        nxt_btn = ttk.Button(self, text="Next", command=self.go_next)
+        nxt_btn.pack(pady=20)
+
+        self.add_nav_buttons(back_command=None)  # No back at start
+
+    def go_next(self):
+        self.controller.filtered_values = [all_bytes_values[0]]  # Initialize with byte 1
+        self.controller.current_byte_index = 1  # Start with byte 2
+        self.controller.show_frame(ByteConfigFrame)
+
+
+class ByteConfigFrame(BaseFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, controller)
+        self.byte_label = ttk.Label(self, text="", font=("Arial", 16))
+        self.byte_label.pack(pady=10)
+
+        self.values_label = ttk.Label(self, text="", wraplength=800)
+        self.values_label.pack(pady=5)
+
+        self.choice_var = tk.StringVar(value="A")
+        ttk.Radiobutton(self, text="Use All Values", variable=self.choice_var, value="A").pack(anchor='w', padx=20)
+        ttk.Radiobutton(self, text="Specify a Range", variable=self.choice_var, value="R").pack(anchor='w', padx=20)
+
+        self.range_frame = ttk.Frame(self)
+        self.start_entry = ttk.Entry(self.range_frame, width=10)
+        self.end_entry = ttk.Entry(self.range_frame, width=10)
+        ttk.Label(self.range_frame, text="Start Hex (e.g. 0x20): ").grid(row=0, column=0, padx=5, pady=5)
+        self.start_entry.grid(row=0, column=1, padx=5, pady=5)
+        ttk.Label(self.range_frame, text="End Hex (e.g. 0x25): ").grid(row=1, column=0, padx=5, pady=5)
+        self.end_entry.grid(row=1, column=1, padx=5, pady=5)
+        self.range_frame.pack(pady=10)
+
+        self.send_button = ttk.Button(self, text="Send Messages", command=self.send_messages)
+        self.send_button.pack(pady=10)
+
+        self.add_nav_buttons(back_command=self.go_back)
+
+    def tkraise(self, aboveThis=None):
+        super().tkraise(aboveThis)
+        i = self.controller.current_byte_index
+        if i < 8:
+            self.byte_label.config(text=f"Configure Byte {i+1}")
+            vals = all_bytes_values[i]
+            self.values_label.config(text="Possible Values:\n" + " ".join([f"0x{v:02X}" for v in vals]))
+        else:
+            # Should not happen
+            self.byte_label.config(text="Invalid Byte Configuration")
+            self.values_label.config(text="")
+
+    def send_messages(self):
+        i = self.controller.current_byte_index
+        vals = all_bytes_values[i]
+
+        choice = self.choice_var.get()
+        if choice == 'A':
+            filtered = vals[:]
+        else:
+            start_str = self.start_entry.get().strip()
+            end_str = self.end_entry.get().strip()
+            try:
+                start_val = int(start_str, 16)
+                end_val = int(end_str, 16)
+                filtered = [v for v in vals if start_val <= v <= end_val]
+                if len(filtered) == 0:
+                    messagebox.showerror("Error", "No values found in the specified range.")
+                    return
+            except ValueError:
+                messagebox.showerror("Error", "Invalid hex inputs for range.")
+                return
+
+        # Save the filtered values
+        self.controller.filtered_values.append(filtered)
+
+        # Send messages for this byte's configuration
+        self.controller.send_and_receive_for_byte(i, filtered)
+
+        # Increment to next byte
+        self.controller.current_byte_index += 1
+
+        if self.controller.current_byte_index >= 8:
+            # Done configuring bytes, proceed to search
+            self.controller.teardown_can()
+            self.controller.show_frame(SearchMenuFrame)
+        else:
+            # Proceed to configure next byte
+            self.controller.show_frame(ByteConfigFrame)
+
+    def go_back(self):
+        if self.controller.current_byte_index <=1:
+            # Back to StartFrame
+            self.controller.show_frame(StartFrame)
+        else:
+            # Remove last appended configuration
+            if len(self.controller.filtered_values) >1:
+                self.controller.filtered_values.pop()
+            self.controller.current_byte_index -=1
+            self.controller.show_frame(ByteConfigFrame)
+
+
+class SendingFrame(BaseFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, controller)
+        ttk.Label(self, text="Sending Messages...", font=("Arial", 18)).pack(pady=20)
+
+        self.progress_label = ttk.Label(self, text="Please wait while messages are sent and responses are recorded.")
+        self.progress_label.pack(pady=10)
+
+        # Start sending in a separate thread to keep GUI responsive
+        self.after(100, self.do_sending)
+
+        self.add_nav_buttons(back_command=self.go_back)
+
+    def do_sending(self):
+        # Perform sending in a non-blocking way (simple after call)
+        # Since send_and_receive_for_byte is already called per byte in ByteConfigFrame,
+        # this frame might not be necessary. But to keep consistency, we'll pass.
+        # Alternatively, you can remove SendingFrame and handle sending in ByteConfigFrame.
+        # For now, we'll proceed without implementing additional sending here.
+        messagebox.showinfo("Completed", "All combinations sent and responses logged.")
+        self.controller.show_frame(SearchMenuFrame)
+
+    def go_back(self):
+        # If user clicks back here, go back to ByteConfig (not logical, but user requested back always)
+        # Actually, going back after sending doesn't make much sense. Let's allow it anyway:
+        self.controller.show_frame(ByteConfigFrame)
+
+
+class SearchMenuFrame(BaseFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, controller)
+        ttk.Label(self, text="Search Menu", font=("Arial", 20)).pack(pady=20)
+
+        ttk.Button(self, text="Search by Data Pattern (Use 0xFF as wildcard)", command=self.search_data).pack(pady=10)
+        ttk.Button(self, text="Search by Response ID", command=self.search_id).pack(pady=10)
+        ttk.Button(self, text="Search by Both ID and Data Pattern (Use 0xFF as wildcard)", command=self.search_both).pack(pady=10)
+
+        self.add_nav_buttons(back_command=self.go_back)
+
+    def search_data(self):
+        self.controller.show_frame(SearchDataFrame)
+
+    def search_id(self):
+        self.controller.show_frame(SearchIDFrame)
+
+    def search_both(self):
+        self.controller.show_frame(SearchBothFrame)
+
+    def go_back(self):
+        self.controller.show_frame(StartFrame)
+
+
+class SearchDataFrame(BaseFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, controller)
+        ttk.Label(self, text="Enter response data pattern (8 hex values, 0xFF as wildcard):", font=("Arial", 14)).pack(pady=10)
+        self.entry = ttk.Entry(self, width=50)
+        self.entry.pack(pady=5)
+        ttk.Button(self, text="Search", command=self.do_search).pack(pady=10)
+        self.add_nav_buttons(back_command=self.go_back)
+
+    def do_search(self):
+        query = self.entry.get().strip()
+        parts = query.split()
+        if len(parts) != 8:
+            messagebox.showerror("Error", "You must provide exactly 8 hex values.")
+            return
+        pattern = []
+        for p in parts:
+            try:
+                val = int(p, 16)
+                if 0 <= val <= 0xFF:
+                    pattern.append(val)
+                else:
+                    messagebox.showerror("Error", f"Value {p} out of range.")
+                    return
+            except ValueError:
+                messagebox.showerror("Error", f"Invalid hex value: {p}")
+                return
+        pattern = tuple(pattern)
+
+        results = self.controller.search_responses_by_data(pattern)
+        self.controller.frames[ResultsFrame].show_results(results)
+        self.controller.show_frame(ResultsFrame)
+
+    def go_back(self):
+        self.controller.show_frame(SearchMenuFrame)
+
+
+class SearchIDFrame(BaseFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, controller)
+        ttk.Label(self, text="Enter response ID (hex format, e.g., 0x18FFFFF1):", font=("Arial", 14)).pack(pady=10)
+        self.entry = ttk.Entry(self, width=20)
+        self.entry.pack(pady=5)
+        ttk.Button(self, text="Search", command=self.do_search).pack(pady=10)
+        self.add_nav_buttons(back_command=self.go_back)
+
+    def do_search(self):
+        id_str = self.entry.get().strip()
+        rx_id_val = parse_hex_id(id_str)
+        if rx_id_val is None:
+            messagebox.showerror("Error", "Invalid hex ID.")
+            return
+
+        results = self.controller.search_responses_by_id(rx_id_val)
+        self.controller.frames[ResultsFrame].show_results(results)
+        self.controller.show_frame(ResultsFrame)
+
+    def go_back(self):
+        self.controller.show_frame(SearchMenuFrame)
+
+
+class SearchBothFrame(BaseFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, controller)
+        ttk.Label(self, text="Enter response ID (hex):", font=("Arial", 14)).pack(pady=5)
+        self.id_entry = ttk.Entry(self, width=20)
+        self.id_entry.pack(pady=5)
+        ttk.Label(self, text="Enter response data pattern (8 hex values, 0xFF as wildcard):", font=("Arial", 14)).pack(pady=5)
+        self.data_entry = ttk.Entry(self, width=50)
+        self.data_entry.pack(pady=5)
+
+        ttk.Button(self, text="Search", command=self.do_search).pack(pady=10)
+        self.add_nav_buttons(back_command=self.go_back)
+
+    def do_search(self):
+        id_str = self.id_entry.get().strip()
+        rx_id_val = parse_hex_id(id_str)
+        if rx_id_val is None:
+            messagebox.showerror("Error", "Invalid hex ID.")
+            return
+
+        query = self.data_entry.get().strip()
+        parts = query.split()
+        if len(parts) != 8:
+            messagebox.showerror("Error", "Must provide exactly 8 hex values for data pattern.")
+            return
+        pattern = []
+        for p in parts:
+            try:
+                val = int(p,16)
+                if 0 <= val <= 0xFF:
+                    pattern.append(val)
+                else:
+                    messagebox.showerror("Error", f"Value {p} out of range.")
+                    return
+            except ValueError:
+                messagebox.showerror("Error", f"Invalid hex value: {p}")
+                return
+        pattern = tuple(pattern)
+
+        results = self.controller.search_responses_by_both(rx_id_val, pattern)
+        self.controller.frames[ResultsFrame].show_results(results)
+        self.controller.show_frame(ResultsFrame)
+
+    def go_back(self):
+        self.controller.show_frame(SearchMenuFrame)
+
+
+class ResultsFrame(BaseFrame):
+    def __init__(self, parent, controller):
+        super().__init__(parent, controller)
+        ttk.Label(self, text="Search Results", font=("Arial", 18)).pack(pady=10)
+        self.text = tk.Text(self, wrap='word', height=25, width=100)
+        self.text.pack(pady=10)
+        self.add_nav_buttons(back_command=self.go_back)
+
+    def show_results(self, results):
+        self.text.delete("1.0", tk.END)
+        if results:
+            self.text.insert(tk.END, f"Found {len(results)} matching responses:\n\n")
+            for record in results:
+                tx_data_str = " ".join([f"0x{b:02X}" for b in record['tx_data']])
+                rx_data_str = " ".join([f"0x{b:02X}" for b in record['rx_data']])
+                self.text.insert(tk.END, f"TX_ID={hex(record['tx_id'])} | TX_Data=[{tx_data_str}] | RX_ID={hex(record['rx_id'])} | RX_Data=[{rx_data_str}]\n")
+        else:
+            self.text.insert(tk.END, "No matching responses found.\n")
+
+    def go_back(self):
+        self.controller.show_frame(SearchMenuFrame)
+
+
+if __name__ == "__main__":
+    app = App()
+    app.mainloop()
