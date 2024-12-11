@@ -1,0 +1,149 @@
+import itertools
+import can
+import time
+
+def select_byte_values(byte_index, predefined_values):
+    """
+    Interactively configure how to select values for a given byte.
+    
+    Args:
+        byte_index (int): The index (0-7) of the byte.
+        predefined_values (list[int]): The predefined array of possible values for this byte.
+    
+    Returns:
+        list[int]: The list of selected values for this byte.
+    """
+    # If there is only one value and it is 0x00, no need to ask—it's always 0x00.
+    if len(predefined_values) == 1 and predefined_values[0] == 0x00:
+        print(f"\nByte {byte_index+1} has only one possible value: 0x00")
+        print("This byte will always be 0x00.")
+        return [0x00]
+
+    while True:
+        print(f"\nByte {byte_index+1} predefined values: {[hex(v) for v in predefined_values]}")
+        print("  1) Single Value (choose one from the predefined list)")
+        print("  2) Full Array (use all predefined values)")
+        print("  3) Partial Range (choose a start and end value from the predefined list)")
+
+        choice = input("Select option (1/2/3): ").strip()
+
+        if choice == '1':
+            # Single value
+            val_str = input("Enter the hex value from the predefined list: ").strip()
+            try:
+                val = int(val_str, 16)
+                if val in predefined_values:
+                    return [val]
+                else:
+                    print("The entered value is not in the predefined list. Try again.")
+            except ValueError:
+                print("Invalid hex value. Try again.")
+
+        elif choice == '2':
+            # Full array
+            return predefined_values
+
+        elif choice == '3':
+            # Partial range
+            start_str = input("Enter start hex value from the predefined list: ").strip()
+            end_str = input("Enter end hex value from the predefined list: ").strip()
+            try:
+                start_val = int(start_str, 16)
+                end_val = int(end_str, 16)
+                if start_val in predefined_values and end_val in predefined_values:
+                    # We need to ensure that start_val and end_val reflect a contiguous subrange
+                    # within predefined_values in their sorted order.
+                    # Let's sort predefined_values and take the slice between these two values.
+                    sorted_vals = sorted(predefined_values)
+                    if start_val <= end_val:
+                        # Extract the subrange
+                        subrange = [v for v in sorted_vals if start_val <= v <= end_val]
+                        if subrange:
+                            return subrange
+                        else:
+                            print("No values found in the specified range. Try again.")
+                    else:
+                        print("Start value is greater than end value. Try again.")
+                else:
+                    print("Start or end value not in the predefined list. Try again.")
+            except ValueError:
+                print("Invalid hex input. Try again.")
+        else:
+            print("Invalid choice. Please select 1, 2, or 3.")
+
+
+def main():
+    # ------------------------------------------------------------
+    # CAN Configuration (Adjust as necessary)
+    # ------------------------------------------------------------
+    bus = can.ThreadSafeBus(channel='can0', interface='socketcan', bitrate=500000)
+    asc_filename = "can_log.asc"
+    writer = can.ASCWriter(asc_filename)
+
+    # Example extended CAN ID, change as needed
+    request_id = 0x18FFFFF0
+    is_extended_id = True
+
+    # ------------------------------------------------------------
+    # Predefined arrays for each of the 8 bytes
+    # Adjust these arrays as per your project requirements.
+    # If a byte should remain 0x00 always, just make its array [0x00].
+    # Example arrays:
+    byte0_values = [0x00]  # Only one value, always 0x00
+    byte1_values = [0x00, 0x01, 0x02, 0x10, 0x20, 0x21, 0x22]
+    byte2_values = [0x00, 0x05, 0x10, 0x1A, 0x1B, 0x20, 0x21, 0xFF]
+    byte3_values = [0x00, 0xA0, 0xA1, 0xA2]
+    byte4_values = [0x00]  # Only one value, always 0x00
+    byte5_values = [0x10, 0x11, 0x12, 0x13, 0x14]  # Example set
+    byte6_values = [0x00, 0x40, 0x41, 0x42, 0x50]
+    byte7_values = [0x00, 0x99]
+
+    all_predefined = [
+        byte0_values,
+        byte1_values,
+        byte2_values,
+        byte3_values,
+        byte4_values,
+        byte5_values,
+        byte6_values,
+        byte7_values
+    ]
+
+    print("Configure each of the 8 bytes by selecting one of the predefined modes.")
+    selected_values_per_byte = []
+    for i, arr in enumerate(all_predefined):
+        vals = select_byte_values(i, arr)
+        selected_values_per_byte.append(vals)
+
+    # Create all combinations
+    all_combinations = itertools.product(*selected_values_per_byte)
+
+    # ------------------------------------------------------------
+    # Logging Start
+    # ------------------------------------------------------------
+    writer.start()
+
+    # ------------------------------------------------------------
+    # Sending and Receiving Messages
+    # ------------------------------------------------------------
+    try:
+        for combo in all_combinations:
+            msg_data = list(combo)
+            # Ensure we have exactly 8 bytes in the message
+            # The arrays are all 8 bytes worth of data, so we already have 8 bytes in combo.
+            # If in the future you vary lengths, pad with 0x00 as needed.
+            msg = can.Message(
+                arbitration_id=request_id,
+                data=msg_data,
+                is_extended_id=is_extended_id
+            )
+
+            try:
+                bus.send(msg)
+                writer.on_message_received(msg)
+                print(f"Sent: ID={hex(request_id)} Data={[hex(d) for d in msg_data]}")
+            except can.CanError as e:
+                print(f"Error sending message: {e}")
+                continue
+
+            # Optional: Attempt to read a response
