@@ -1,0 +1,244 @@
+import itertools
+import can
+import time
+
+def prompt_for_range_filter(byte_index, values):
+    """
+    Ask the user if they want to use all values or a specific range of values for this byte.
+    Returns a filtered list of values to use.
+    """
+    print(f"\nByte {byte_index+1} possible values:")
+    print(" ".join([f"0x{v:02X}" for v in values]))
+
+    while True:
+        choice = input("Use all values (A) or specify a range (R)? (A/R): ").strip().upper()
+        if choice == 'A':
+            return values[:]
+        elif choice == 'R':
+            start_str = input("Enter start hex value (e.g. 0x20): ").strip()
+            end_str = input("Enter end hex value (e.g. 0x25): ").strip()
+            try:
+                start_val = int(start_str, 16)
+                end_val = int(end_str, 16)
+                filtered = [v for v in values if start_val <= v <= end_val]
+                if len(filtered) == 0:
+                    print("No values found in the specified range. Try again.")
+                else:
+                    return filtered
+            except ValueError:
+                print("Invalid hex inputs. Try again.")
+        else:
+            print("Invalid choice. Enter 'A' or 'R'.")
+
+def parse_hex_values(input_str):
+    """
+    Parse a string of hex values (e.g. '0x10 0x11 0xA0') into a tuple of integers.
+    Expects exactly 8 values for a pattern-based search.
+    Returns a tuple of integers if successful, or None if parsing fails.
+    """
+    parts = input_str.strip().split()
+    if len(parts) != 8:
+        print("You must provide exactly 8 hex values (use 0xFF as wildcard for any byte).")
+        return None
+    result = []
+    for p in parts:
+        try:
+            val = int(p, 16)
+            if 0 <= val <= 0xFF:
+                result.append(val)
+            else:
+                print(f"Value {p} out of 0x00-0xFF range.")
+                return None
+        except ValueError:
+            print(f"Invalid hex value: {p}")
+            return None
+    return tuple(result)
+
+def parse_hex_id(input_str):
+    """
+    Parse a single hex ID (e.g. '0x18FFFFF1') into an integer.
+    Returns an integer if successful, or None if parsing fails.
+    """
+    try:
+        val = int(input_str, 16)
+        return val
+    except ValueError:
+        print("Invalid hex ID. Must be a valid hex number starting with 0x.")
+        return None
+
+def matches_pattern(response_bytes, pattern):
+    """
+    Check if the response_bytes match the given pattern, where 0xFF acts as a wildcard.
+    Both response_bytes and pattern are tuples of length 8.
+    Return True if for all indices:
+       pattern[i] == 0xFF or response_bytes[i] == pattern[i]
+    """
+    for rb, pb in zip(response_bytes, pattern):
+        if pb != 0xFF and rb != pb:
+            return False
+    return True
+
+def main():
+    # ------------------------------------------------------------
+    # Configuration Section
+    # ------------------------------------------------------------
+    channel = 'can0'             # Adjust as needed
+    interface = 'socketcan'      # Adjust as needed
+    bitrate = 500000             # Adjust as needed
+
+    request_id = 0x18FFFFF0      # Extended CAN ID for requests
+    expected_response_id = 0x18FFFFF1  # The corresponding expected response CAN ID
+    is_extended_id = True
+
+    asc_filename = "can_log.asc" # Log file name
+
+    send_timeout = 1.0
+    recv_timeout = 0.5
+    recv_poll_interval = 0.1
+
+    # Predefined values for each of the 8 Bytes
+    byte1_values = [0x01]
+    byte2_values = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27
+    ]
+    byte3_values = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17]
+    byte4_values = [0xA0, 0xA1, 0xA2]
+    byte5_values = [0x00]
+    byte6_values = [0x00]
+    byte7_values = [0x00]
+    byte8_values = [0x00]
+
+    all_bytes_values = [
+        byte1_values,
+        byte2_values,
+        byte3_values,
+        byte4_values,
+        byte5_values,
+        byte6_values,
+        byte7_values,
+        byte8_values
+    ]
+    # ------------------------------------------------------------
+
+    bus = can.ThreadSafeBus(channel=channel, interface=interface, bitrate=bitrate)
+    writer = can.ASCWriter(asc_filename)
+
+    # For each byte except the first, ask user choice
+    filtered_values = [all_bytes_values[0]]  # Byte 1 unchanged
+    for i in range(1, 8):
+        filtered = prompt_for_range_filter(i, all_bytes_values[i])
+        filtered_values.append(filtered)
+
+    # Generate all combinations
+    all_combinations = itertools.product(*filtered_values)
+
+    # Store all responses as a list of dicts
+    responses_list = []
+
+    try:
+        for combo in all_combinations:
+            msg_data = list(combo)
+            tx_msg = can.Message(
+                arbitration_id=request_id,
+                data=msg_data,
+                is_extended_id=is_extended_id
+            )
+
+            # Send the message
+            try:
+                bus.send(tx_msg, timeout=send_timeout)
+                writer.on_message_received(tx_msg)
+                print(f"Sent: TX_ID={hex(request_id)} TX_Data={[hex(d) for d in msg_data]}")
+            except can.CanError as e:
+                print(f"Error sending message: {e}")
+                time.sleep(0.05)
+                continue
+
+            # Add a small delay to reduce queue full errors if sending too fast
+            time.sleep(0.01)
+
+            # Attempt to receive a corresponding response
+            start_time = time.time()
+            while time.time() - start_time < recv_timeout:
+                response = bus.recv(timeout=recv_poll_interval)
+                if response is not None and response.arbitration_id == expected_response_id:
+                    writer.on_message_received(response)
+                    r_data = tuple(response.data)
+                    print(f"Received: RX_ID={hex(response.arbitration_id)} RX_Data={[hex(d) for d in response.data]}")
+                    responses_list.append({
+                        'tx_id': request_id,
+                        'tx_data': tuple(msg_data),
+                        'rx_id': response.arbitration_id,
+                        'rx_data': r_data
+                    })
+                    break
+
+    finally:
+        bus.shutdown()
+        print(f"Logging complete. Output saved to {asc_filename}")
+
+    # After completing all combinations, allow user to choose search mode
+    while True:
+        print("\nSearch Options:")
+        print("1) Search by Response Data (Use 0xFF as wildcard)")
+        print("2) Search by Response ID")
+        print("3) Search by Both ID and Data (Data pattern uses 0xFF as wildcard)")
+        print("4) Exit")
+        choice = input("Select an option (1/2/3/4): ").strip()
+
+        if choice == '4':
+            break
+
+        if choice == '1':
+            # Search by data pattern only
+            query = input("Enter response data pattern (8 hex values, use 0xFF as wildcard): ").strip()
+            pattern = parse_hex_values(query)
+            if pattern is None:
+                continue
+            # Filter responses by rx_data pattern
+            matching = [r for r in responses_list if matches_pattern(r['rx_data'], pattern)]
+
+        elif choice == '2':
+            # Search by ID only
+            id_str = input("Enter response ID (hex format, e.g. 0x18FFFFF1): ").strip()
+            rx_id_val = parse_hex_id(id_str)
+            if rx_id_val is None:
+                continue
+            matching = [r for r in responses_list if r['rx_id'] == rx_id_val]
+
+        elif choice == '3':
+            # Search by both ID and data pattern
+            id_str = input("Enter response ID (hex format): ").strip()
+            rx_id_val = parse_hex_id(id_str)
+            if rx_id_val is None:
+                continue
+
+            query = input("Enter response data pattern (8 hex values, use 0xFF as wildcard): ").strip()
+            pattern = parse_hex_values(query)
+            if pattern is None:
+                continue
+
+            matching = [r for r in responses_list if r['rx_id'] == rx_id_val and matches_pattern(r['rx_data'], pattern)]
+
+        else:
+            print("Invalid choice, try again.")
+            continue
+
+        # Print results
+        if matching:
+            print(f"\nFound {len(matching)} matching responses:")
+            for record in matching:
+                tx_data_str = " ".join([f"0x{b:02X}" for b in record['tx_data']])
+                rx_data_str = " ".join([f"0x{b:02X}" for b in record['rx_data']])
+                print(f"TX_ID={hex(record['tx_id'])} TX_Data=[{tx_data_str}] | RX_ID={hex(record['rx_id'])} RX_Data=[{rx_data_str}]")
+        else:
+            print("No matching responses found.")
+
+    print("Search completed. Exiting.")
+
+if __name__ == "__main__":
+    main()
