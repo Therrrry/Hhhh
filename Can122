@@ -1,0 +1,100 @@
+import itertools
+import can
+import time
+
+def main():
+    # ------------------------------------------------------------
+    # Configuration Section
+    # ------------------------------------------------------------
+    channel = 'can0'            # Adjust as needed for your hardware
+    interface = 'socketcan'     # Adjust as needed (e.g., 'pcan', 'vector')
+    bitrate = 500000            # Adjust as needed
+
+    request_id = 0x18FFFFF0     # Extended CAN ID
+    is_extended_id = True
+
+    asc_filename = "can_log.asc"  # Log file name
+
+    send_timeout = 1.0
+    recv_timeout = 0.5
+    recv_poll_interval = 0.1
+
+    # ------------------------------------------------------------
+    # Predefined values for each of the 8 Bytes
+    # Here we explicitly define each byte's possible values.
+    # Byte 1: Single value [0x01]
+    # Byte 2: Explicitly list all 40 values. Example:
+    #   0x00 to 0x27 (inclusive) gives 40 values (0x00 through 0x27)
+    # Replace these with the exact values you need.
+    byte1_values = [0x01]
+    byte2_values = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27
+    ]
+    byte3_values = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17]
+    byte4_values = [0xA0, 0xA1, 0xA2]
+    byte5_values = [0x00]  # Only one value
+    byte6_values = [0x00]  # Only one value
+    byte7_values = [0x00]  # Only one value
+    byte8_values = [0x00]  # Only one value
+
+    # Combine all byte arrays into a single list of lists
+    byte_values_options = [
+        byte1_values,
+        byte2_values,
+        byte3_values,
+        byte4_values,
+        byte5_values,
+        byte6_values,
+        byte7_values,
+        byte8_values
+    ]
+
+    # ------------------------------------------------------------
+
+    # Set up the CAN bus
+    bus = can.ThreadSafeBus(channel=channel, interface=interface, bitrate=bitrate)
+    writer = can.ASCWriter(asc_filename)
+
+    # Generate all combinations of values
+    all_combinations = itertools.product(*byte_values_options)
+
+    try:
+        for combo in all_combinations:
+            msg_data = list(combo)
+            msg = can.Message(
+                arbitration_id=request_id,
+                data=msg_data,
+                is_extended_id=is_extended_id
+            )
+
+            # Send the message
+            try:
+                bus.send(msg, timeout=send_timeout)
+                # Log the sent message
+                writer.on_message_received(msg)
+                print(f"Sent: ID={hex(request_id)} Data={[hex(d) for d in msg_data]}")
+            except can.CanError as e:
+                print(f"Error sending message: {e}")
+                continue
+
+            # Attempt to receive a response
+            start_time = time.time()
+            while time.time() - start_time < recv_timeout:
+                response = bus.recv(timeout=recv_poll_interval)
+                if response is not None:
+                    # Log the received message
+                    writer.on_message_received(response)
+                    print(f"Received: ID={hex(response.arbitration_id)} Data={[hex(d) for d in response.data]}")
+                    break
+
+    finally:
+        # Clean up
+        bus.shutdown()
+        print(f"Logging complete. Output saved to {asc_filename}")
+
+if __name__ == "__main__":
+    main()
