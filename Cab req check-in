@@ -1,0 +1,138 @@
+import itertools
+import can
+import time
+
+def get_timestamp_str():
+    # Returns a timestamp string: YYYY-MM-DD HH:MM:SS.mmm
+    t = time.time()
+    local_time = time.localtime(t)
+    ms = int((t % 1) * 1000)
+    return time.strftime("%Y-%m-%d %H:%M:%S", local_time) + f".{ms:03d}"
+
+def main():
+    # ------------------------------------------------------------
+    # Configuration Section
+    # ------------------------------------------------------------
+    channel = 'can0'            # Adjust as needed for your hardware
+    interface = 'socketcan'     # Adjust as needed
+    bitrate = 500000            # Adjust as needed
+
+    request_id = 0x18FFFFF0     # Extended CAN ID
+    is_extended_id = True
+
+    asc_filename = "can_log.asc"  # Log file name
+
+    send_timeout = 1.0
+    recv_timeout = 0.5
+    recv_poll_interval = 0.1
+
+    # ------------------------------------------------------------
+    # Predefined values for each of the 8 Bytes
+    # Modify these lists to have exactly the values you want.
+    byte1_values = [0x01]
+    byte2_values = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27
+    ]
+    byte3_values = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17]
+    byte4_values = [0xA0, 0xA1, 0xA2]
+    byte5_values = [0x00]
+    byte6_values = [0x00]
+    byte7_values = [0x00]
+    byte8_values = [0x00]
+
+    byte_values_options = [
+        byte1_values,
+        byte2_values,
+        byte3_values,
+        byte4_values,
+        byte5_values,
+        byte6_values,
+        byte7_values,
+        byte8_values
+    ]
+    # ------------------------------------------------------------
+
+    # Example expected responses:
+    # For demonstration, we set just one expected response. You must add your own.
+    # Key: (tx_id, (tx_data,...))
+    # Value: (expected_rx_id, [expected_rx_data,...])
+    expected_responses = {
+        # Example: if we send: ID=0x18FFFFF0, Data=[0x01,0x00,0x10,0xA0,0x00,0x00,0x00,0x00]
+        # we expect: ID=0x18FFFFF1, Data=[0x00,0xFF,0xAA]
+        (request_id, (0x01,0x00,0x10,0xA0,0x00,0x00,0x00,0x00)): (0x18FFFFF1, [0x00,0xFF,0xAA])
+        # Add more entries for each known expectation
+    }
+
+    # Set up the CAN bus
+    bus = can.ThreadSafeBus(channel=channel, interface=interface, bitrate=bitrate)
+    writer = can.ASCWriter(asc_filename)
+
+    # Generate all combinations of values
+    all_combinations = itertools.product(*byte_values_options)
+
+    print("Only showing mismatches between expected and received responses:")
+    print("-------------------------------------------------------------------------------------------")
+
+    try:
+        for combo in all_combinations:
+            msg_data = list(combo)
+            msg = can.Message(
+                arbitration_id=request_id,
+                data=msg_data,
+                is_extended_id=is_extended_id
+            )
+
+            # Send the message
+            try:
+                bus.send(msg, timeout=send_timeout)
+                writer.on_message_received(msg)  # Log the sent message
+            except can.CanError as e:
+                # If send fails, print error (this is a kind of mismatch since we cannot proceed)
+                timestamp = get_timestamp_str()
+                print(f"{timestamp} | TX Error: ID={hex(request_id)} Data={msg_data} Error={e}")
+                continue
+
+            # Attempt to receive a response
+            received_response = None
+            start_time = time.time()
+            while time.time() - start_time < recv_timeout:
+                response = bus.recv(timeout=recv_poll_interval)
+                if response is not None:
+                    writer.on_message_received(response)  # Log the received message
+                    received_response = response
+                    break
+
+            # Check if we have an expected response for this TX message
+            tx_key = (request_id, tuple(msg_data))
+            if tx_key in expected_responses:
+                expected_rx_id, expected_rx_data = expected_responses[tx_key]
+
+                # If we have no response but expected one
+                if received_response is None:
+                    timestamp = get_timestamp_str()
+                    print(f"{timestamp} | Mismatch: Expected ID={hex(expected_rx_id)}, Data={expected_rx_data}, but got NO RESPONSE for TX:ID={hex(request_id)},Data={msg_data}")
+                else:
+                    # Check ID and Data
+                    if received_response.arbitration_id != expected_rx_id or list(received_response.data) != expected_rx_data:
+                        timestamp = get_timestamp_str()
+                        print(f"{timestamp} | Mismatch: For TX:ID={hex(request_id)},Data={msg_data}")
+                        print(f"   Expected: ID={hex(expected_rx_id)}, Data={expected_rx_data}")
+                        print(f"   Received: ID={hex(received_response.arbitration_id)}, Data={[hex(d) for d in received_response.data]}")
+
+            else:
+                # If there is no expected response for this message, we do nothing.
+                # The user requested to show only not matched messages. 
+                # Without an expectation, we can't say it's a mismatch.
+                pass
+
+    finally:
+        # Clean up
+        bus.shutdown()
+        print(f"Logging complete. Output saved to {asc_filename}")
+
+if __name__ == "__main__":
+    main()
