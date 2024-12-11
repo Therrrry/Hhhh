@@ -1,0 +1,161 @@
+import itertools
+import can
+import time
+from openpyxl import load_workbook
+import os
+
+def parse_hex_message(hex_str):
+    """
+    Parse a string of hex values like "0x01 0x05 0x10 0xA0 0x00 0x00 0x00 0x00"
+    into a list of integers [0x01, 0x05, 0x10, 0xA0, 0x00, 0x00, 0x00, 0x00].
+    """
+    parts = hex_str.strip().split()
+    values = []
+    for p in parts:
+        val = int(p, 16)
+        values.append(val)
+    return values
+
+def format_hex_list(data):
+    """
+    Format a list of integers [0x01, 0x05, 0x10, ...] into a string "0x01 0x05 0x10 ..."
+    """
+    return " ".join(f"0x{b:02X}" for b in data)
+
+def main():
+    # ------------------------------------------------------------
+    # Configuration Section
+    # ------------------------------------------------------------
+    channel = 'can0'
+    interface = 'socketcan'
+    bitrate = 500000
+    request_id = 0x18FFFFF0
+    is_extended_id = True
+
+    asc_filename = "mismatch_log.asc"
+
+    send_timeout = 1.0
+    recv_timeout = 0.5
+    recv_poll_interval = 0.1
+
+    # Set your Excel file path here:
+    excel_filename = r"D:\Automation_CAN\can\messages.xlsx"
+    sheet_name = "Sheet1"
+
+    # Predefined values for each of the 8 Bytes
+    byte1_values = [0x01]
+    byte2_values = [
+        0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+        0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F,
+        0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17,
+        0x18, 0x19, 0x1A, 0x1B, 0x1C, 0x1D, 0x1E, 0x1F,
+        0x20, 0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27
+    ]
+    byte3_values = [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17]
+    byte4_values = [0xA0, 0xA1, 0xA2]
+    byte5_values = [0x00]
+    byte6_values = [0x00]
+    byte7_values = [0x00]
+    byte8_values = [0x00]
+
+    byte_values_options = [
+        byte1_values,
+        byte2_values,
+        byte3_values,
+        byte4_values,
+        byte5_values,
+        byte6_values,
+        byte7_values,
+        byte8_values
+    ]
+    # ------------------------------------------------------------
+
+    # Check if the Excel file exists
+    if not os.path.isfile(excel_filename):
+        print(f"Excel file not found at {excel_filename}")
+        return
+
+    # Load expected messages from Excel
+    wb = load_workbook(excel_filename)
+    if sheet_name not in wb.sheetnames:
+        print(f"Sheet '{sheet_name}' not found in {excel_filename}")
+        return
+    sheet = wb[sheet_name]
+
+    # Set up the CAN bus
+    bus = can.ThreadSafeBus(channel=channel, interface=interface, bitrate=bitrate)
+    writer = can.ASCWriter(asc_filename)
+
+    # Generate all combinations
+    all_combinations = itertools.product(*byte_values_options)
+
+    try:
+        for i, combo in enumerate(all_combinations, start=2):
+            # i corresponds to the Excel row (starting at 2)
+            # combo is the sent message data
+            sent_data = list(combo)
+            sent_str = format_hex_list(sent_data)
+
+            # Read expected message from Excel (Column C)
+            expected_cell = sheet.cell(row=i, column=3).value
+            if expected_cell is None:
+                # No expected message for this row
+                # You can decide what to do: continue, break, or handle differently
+                continue
+
+            expected_data = parse_hex_message(expected_cell)
+            expected_str = format_hex_list(expected_data)
+
+            # Send the CAN message
+            msg = can.Message(arbitration_id=request_id, data=sent_data, is_extended_id=is_extended_id)
+            try:
+                bus.send(msg, timeout=send_timeout)
+            except can.CanError as e:
+                print(f"Error sending message at row {i}: {e}")
+                received_data = []
+            else:
+                # Attempt to receive response
+                start_time = time.time()
+                received_msg = None
+                while time.time() - start_time < recv_timeout:
+                    response = bus.recv(timeout=recv_poll_interval)
+                    if response is not None:
+                        received_msg = response
+                        break
+
+                if received_msg:
+                    received_data = list(received_msg.data)
+                else:
+                    # No response received
+                    received_data = []
+
+            # Write sent and received data into Excel (Columns A and B)
+            sheet.cell(row=i, column=1, value=sent_str)
+            if received_data:
+                sheet.cell(row=i, column=2, value=format_hex_list(received_data))
+            else:
+                sheet.cell(row=i, column=2, value="No Response")
+
+            # Compare received with expected
+            if received_data != expected_data:
+                # Mismatch: print and log to ASC
+                print(f"Row {i} MISMATCH!")
+                print(f"Sent:     {sent_str}")
+                print(f"Received: {format_hex_list(received_data) if received_data else 'No Response'}")
+                print(f"Expected: {expected_str}")
+
+                # Log the sent and received messages (if any) to ASC
+                writer.on_message_received(msg)
+                if received_data and received_msg:
+                    writer.on_message_received(received_msg)
+
+    finally:
+        # Save the updated Excel file
+        wb.save(excel_filename)
+
+        # Clean up CAN bus
+        bus.shutdown()
+        print(f"Process complete. Check {excel_filename} for updated data and {asc_filename} for mismatch logs.")
+
+if __name__ == "__main__":
+    main()
