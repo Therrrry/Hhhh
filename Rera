@@ -1,0 +1,77 @@
+import can
+import time
+import logging
+from udsoncan.client import Client
+from udsoncan.connections import PythonIsoTpConnection
+import isotp
+
+# Configure logging
+logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(message)s")
+
+# Initialize CAN and ISO-TP
+def setup_can_iso_tp(rx_id=0x18DA03FA, tx_id=0x18DAFA03, channel="can0", bitrate=500000):
+    try:
+        # Configure ISO-TP (ISO 15765)
+        tp_config = {
+            "stmin": 0,  # Minimum separation time between frames
+            "blocksize": 8,  # Number of frames in a block
+            "ll_data_length": 8,  # Link layer data length (CAN frame size)
+            "tx_padding": 0x00,  # Padding byte for transmit frames
+            "rx_padding": 0x00,  # Padding byte for receive frames
+        }
+
+        bus = can.interface.Bus(channel=channel, bustype="socketcan", bitrate=bitrate)
+        iso_tp_conn = isotp.CanStack(bus, rxid=rx_id, txid=tx_id, params=tp_config)
+        uds_conn = PythonIsoTpConnection(iso_tp_conn)
+        logging.info("CAN ISO-TP interface initialized successfully.")
+        return uds_conn
+    except Exception as e:
+        logging.error(f"Failed to initialize CAN ISO-TP interface: {e}")
+        exit()
+
+# Read data from ECU using UDS
+def read_did(client, did=0xF206):
+    try:
+        with client:
+            logging.info(f"Reading DID: {hex(did)}...")
+            response = client.read_data_by_identifier(did)
+            logging.info(f"Read Response: {response.service_data}")
+            return response.service_data
+    except Exception as e:
+        logging.error(f"Error reading DID {hex(did)}: {e}")
+        return None
+
+# Write data to ECU using UDS
+def write_did(client, did=0xF206, data=[0xA5, 0x5A, 0x9C, 0xC9]):
+    try:
+        with client:
+            logging.info(f"Writing to DID: {hex(did)} with data {data}...")
+            client.write_data_by_identifier(did, bytes(data))
+            logging.info("Write successful.")
+    except Exception as e:
+        logging.error(f"Error writing DID {hex(did)}: {e}")
+
+# Main function
+def main():
+    try:
+        # Initialize CAN ISO-TP connection
+        uds_conn = setup_can_iso_tp()
+
+        # Initialize UDS client
+        client_config = {
+            "request_timeout": 2,  # Timeout for request/response cycle
+        }
+        with Client(uds_conn, request_timeout=client_config["request_timeout"]) as uds_client:
+            # Read DID
+            read_did(uds_client, did=0xF206)
+
+            # Write to DID
+            write_did(uds_client, did=0xF206, data=[0xA5, 0x5A, 0x9C, 0xC9])
+
+            # Perform additional actions if needed
+            logging.info("Read and write operations complete.")
+    except Exception as e:
+        logging.error(f"Unexpected error: {e}")
+
+if __name__ == "__main__":
+    main()
