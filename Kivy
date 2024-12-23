@@ -1,0 +1,100 @@
+from kivy.app import App
+from kivy.uix.boxlayout import BoxLayout
+from kivy.uix.button import Button
+from kivy.uix.textinput import TextInput
+from kivy.uix.label import Label
+from kivy.uix.scrollview import ScrollView
+from kivy.clock import Clock
+from kivy.uix.popup import Popup
+import threading
+import itertools
+import can
+import time
+
+
+class CANApp(BoxLayout):
+    def __init__(self, **kwargs):
+        super().__init__(orientation='vertical', **kwargs)
+        self.channel_input = TextInput(hint_text="CAN Channel (e.g., can0)", multiline=False)
+        self.interface_input = TextInput(hint_text="Interface (e.g., socketcan)", multiline=False)
+        self.bitrate_input = TextInput(hint_text="Bitrate (e.g., 500000)", multiline=False)
+        self.log_area = TextInput(hint_text="Logs will appear here...", readonly=True, size_hint_y=4)
+        self.send_button = Button(text="Start CAN Communication")
+        self.stop_button = Button(text="Stop", disabled=True)
+        
+        self.add_widget(Label(text="CAN Bus Configuration"))
+        self.add_widget(self.channel_input)
+        self.add_widget(self.interface_input)
+        self.add_widget(self.bitrate_input)
+        self.add_widget(self.send_button)
+        self.add_widget(self.stop_button)
+        self.add_widget(self.log_area)
+        
+        self.send_button.bind(on_press=self.start_communication)
+        self.stop_button.bind(on_press=self.stop_communication)
+        self.bus_thread = None
+        self.running = False
+
+    def log_message(self, message):
+        Clock.schedule_once(lambda dt: self.log_area.text += message + '\n')
+
+    def start_communication(self, instance):
+        channel = self.channel_input.text or "can0"
+        interface = self.interface_input.text or "socketcan"
+        bitrate = int(self.bitrate_input.text) if self.bitrate_input.text.isdigit() else 500000
+        
+        self.log_message(f"Starting CAN communication on {channel} with {interface} and {bitrate} bitrate.")
+        self.running = True
+        self.send_button.disabled = True
+        self.stop_button.disabled = False
+        
+        self.bus_thread = threading.Thread(target=self.run_can_communication, args=(channel, interface, bitrate))
+        self.bus_thread.start()
+
+    def stop_communication(self, instance):
+        self.running = False
+        self.send_button.disabled = False
+        self.stop_button.disabled = True
+        self.log_message("Stopped CAN communication.")
+
+    def run_can_communication(self, channel, interface, bitrate):
+        try:
+            bus = can.ThreadSafeBus(channel=channel, interface=interface, bitrate=bitrate)
+            request_id = 0x18FFFFF0
+            is_extended_id = True
+            byte_values = [
+                [0x01],
+                list(range(0x00, 0x28)),
+                [0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17],
+                [0xA0, 0xA1, 0xA2],
+                [0x00], [0x00], [0x00], [0x00]
+            ]
+            all_combinations = itertools.product(*byte_values)
+
+            for combo in all_combinations:
+                if not self.running:
+                    break
+                msg = can.Message(arbitration_id=request_id, data=list(combo), is_extended_id=is_extended_id)
+                try:
+                    bus.send(msg, timeout=1.0)
+                    self.log_message(f"Sent: {msg}")
+                except can.CanError as e:
+                    self.log_message(f"Error sending message: {e}")
+                
+                response = bus.recv(timeout=0.5)
+                if response:
+                    self.log_message(f"Received: {response}")
+
+        except Exception as e:
+            self.log_message(f"Error in communication: {e}")
+        finally:
+            self.running = False
+
+
+class CANAppApp(App):
+    def build(self):
+        return CANApp()
+
+
+if __name__ == "__main__":
+    CANAppApp().run()
