@@ -1,0 +1,221 @@
+import os
+import sys
+import subprocess
+import threading
+import time
+from queue import Queue
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QVBoxLayout, QPushButton, QFileDialog,
+    QListWidget, QLineEdit, QWidget, QMessageBox, QLabel, QHBoxLayout, QScrollArea, QComboBox, QSpinBox
+)
+from PyQt5.QtCore import Qt
+import openpyxl
+
+class ProgramRunnerApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Enhanced Program Runner")
+        self.setGeometry(100, 100, 1000, 700)
+
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+
+        self.layout = QVBoxLayout(self.central_widget)
+
+        # Folder navigation
+        nav_layout = QHBoxLayout()
+        self.back_button = QPushButton("Back")
+        self.forward_button = QPushButton("Forward")
+        self.back_button.clicked.connect(self.navigate_back)
+        self.forward_button.clicked.connect(self.navigate_forward)
+        nav_layout.addWidget(self.back_button)
+        nav_layout.addWidget(self.forward_button)
+
+        self.layout.addLayout(nav_layout)
+
+        # Folder selection
+        folder_layout = QHBoxLayout()
+        self.folder_label = QLabel("Folder: Not Selected")
+        self.select_folder_button = QPushButton("Select Folder")
+        self.select_folder_button.clicked.connect(self.select_folder)
+        folder_layout.addWidget(self.folder_label)
+        folder_layout.addWidget(self.select_folder_button)
+
+        self.layout.addLayout(folder_layout)
+
+        # Search bar
+        self.search_bar = QLineEdit()
+        self.search_bar.setPlaceholderText("Search programs...")
+        self.search_bar.textChanged.connect(self.filter_programs)
+        self.layout.addWidget(self.search_bar)
+
+        # Program list
+        self.program_list = QListWidget()
+        self.layout.addWidget(self.program_list)
+
+        # Excel file list
+        self.excel_list = QListWidget()
+        self.layout.addWidget(QLabel("Excel Sheets"))
+        self.layout.addWidget(self.excel_list)
+
+        # Program execution options
+        execution_layout = QHBoxLayout()
+
+        self.run_button = QPushButton("Run Selected Program")
+        self.cancel_button = QPushButton("Cancel Execution")
+        self.run_button.clicked.connect(self.run_selected_program)
+        self.cancel_button.clicked.connect(self.cancel_execution)
+        execution_layout.addWidget(self.run_button)
+        execution_layout.addWidget(self.cancel_button)
+
+        self.layout.addLayout(execution_layout)
+
+        # Loop and queue settings
+        loop_layout = QHBoxLayout()
+        self.loop_checkbox = QSpinBox()
+        self.loop_checkbox.setRange(1, 1000)
+        self.loop_checkbox.setValue(1)
+        self.layout.addWidget(QLabel("Loop Count (for selected program):"))
+        self.layout.addWidget(self.loop_checkbox)
+
+        # Scrollable Area for Output
+        self.output_area = QScrollArea()
+        self.output_label = QLabel()
+        self.output_label.setWordWrap(True)
+        self.output_area.setWidgetResizable(True)
+        self.output_area.setWidget(self.output_label)
+        self.layout.addWidget(self.output_area)
+
+        # Data
+        self.folder_path = "D:\\Ptu"  # Default folder path
+        self.folder_history = [self.folder_path]
+        self.history_index = 0
+        self.programs = []
+        self.excel_files = []
+        self.running_processes = []
+        self.execution_queue = Queue()
+        self.load_programs()
+
+    def navigate_back(self):
+        if self.history_index > 0:
+            self.history_index -= 1
+            self.folder_path = self.folder_history[self.history_index]
+            self.folder_label.setText(f"Folder: {self.folder_path}")
+            self.load_programs()
+
+    def navigate_forward(self):
+        if self.history_index < len(self.folder_history) - 1:
+            self.history_index += 1
+            self.folder_path = self.folder_history[self.history_index]
+            self.folder_label.setText(f"Folder: {self.folder_path}")
+            self.load_programs()
+
+    def select_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder")
+        if folder:
+            self.folder_path = folder
+            if self.history_index < len(self.folder_history) - 1:
+                self.folder_history = self.folder_history[:self.history_index + 1]
+            self.folder_history.append(folder)
+            self.history_index = len(self.folder_history) - 1
+            self.folder_label.setText(f"Folder: {self.folder_path}")
+            self.load_programs()
+
+    def load_programs(self):
+        if not self.folder_path:
+            return
+
+        self.programs = [
+            f for f in os.listdir(self.folder_path) if f.endswith(".py")
+        ]
+        self.excel_files = [
+            f for f in os.listdir(self.folder_path) if f.endswith(".xlsx")
+        ]
+
+        self.program_list.clear()
+        self.program_list.addItems(self.programs)
+        self.excel_list.clear()
+        self.excel_list.addItems(self.excel_files)
+
+    def filter_programs(self):
+        search_text = self.search_bar.text().lower()
+        filtered_programs = [
+            program for program in self.programs if search_text in program.lower()
+        ]
+        self.program_list.clear()
+        self.program_list.addItems(filtered_programs)
+
+    def run_selected_program(self):
+        selected_item = self.program_list.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "No Selection", "Please select a program to run.")
+            return
+
+        program_name = selected_item.text()
+        program_path = os.path.join(self.folder_path, program_name)
+
+        linked_excel = self.excel_list.currentItem()
+        if linked_excel:
+            excel_path = os.path.join(self.folder_path, linked_excel.text())
+            threading.Thread(target=self.open_excel, args=(excel_path,)).start()
+
+        loop_count = self.loop_checkbox.value()
+
+        for _ in range(loop_count):
+            if len(self.running_processes) < 4:
+                process = subprocess.Popen(
+                    [sys.executable, program_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                self.running_processes.append(process)
+                threading.Thread(target=self.handle_process_output, args=(process,)).start()
+            else:
+                self.execution_queue.put(program_path)
+
+    def cancel_execution(self):
+        for process in self.running_processes:
+            try:
+                process.terminate()
+            except Exception as e:
+                print(f"Error terminating process: {e}")
+        self.running_processes = []
+        self.execution_queue = Queue()
+        self.output_label.setText("Execution canceled.")
+
+    def handle_process_output(self, process):
+        stdout, stderr = process.communicate()
+
+        if process.returncode == 0:
+            self.output_label.setText(f"Output:\n{stdout}")
+        else:
+            self.output_label.setText(f"Error:\n{stderr}")
+
+        self.running_processes.remove(process)
+
+        if not self.execution_queue.empty():
+            next_program = self.execution_queue.get()
+            self.run_program(next_program)
+
+    def run_program(self, program_path):
+        process = subprocess.Popen(
+            [sys.executable, program_path],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        self.running_processes.append(process)
+        threading.Thread(target=self.handle_process_output, args=(process,)).start()
+
+    def open_excel(self, excel_path):
+        try:
+            os.startfile(excel_path)
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to open Excel file: {str(e)}")
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = ProgramRunnerApp()
+    window.show()
+    sys.exit(app.exec_())
