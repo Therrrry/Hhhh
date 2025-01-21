@@ -1,0 +1,100 @@
+    def link_excel(self):
+        selected_item = self.program_list.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "No Selection", "Please select a program to link.")
+            return
+
+        program_name = selected_item.text()
+        excel_path = self.excel_label.text().replace("Excel: ", "").strip()
+
+        if not excel_path or excel_path == "Not Selected":
+            QMessageBox.warning(self, "No Excel Selected", "Please select an Excel file to link.")
+            return
+
+        if program_name in self.linked_combinations:
+            QMessageBox.warning(self, "Already Linked", f"'{program_name}' is already linked to an Excel file.")
+            return
+
+        self.linked_combinations[program_name] = excel_path
+        self.update_linked_list()
+
+        QMessageBox.information(self, "Linked", f"'{program_name}' has been linked to '{excel_path}'.")
+
+    def unlink_excel(self):
+        selected_item = self.linked_list.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "No Selection", "Please select a linked program to unlink.")
+            return
+
+        program_name = selected_item.text().split(" -> ")[0]  # Extract program name
+        if program_name in self.linked_combinations:
+            del self.linked_combinations[program_name]
+            self.update_linked_list()
+
+            QMessageBox.information(self, "Unlinked", f"'{program_name}' has been unlinked.")
+
+    def update_linked_list(self):
+        self.linked_list.clear()
+        unique_combinations = {f"{program} -> {excel}" for program, excel in self.linked_combinations.items()}
+        self.linked_list.addItems(sorted(unique_combinations))
+
+    def run_in_loop(self):
+        selected_item = self.program_list.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "No Selection", "Please select a program to run in a loop.")
+            return
+
+        program_name = selected_item.text()
+        if program_name in self.looped_programs:
+            QMessageBox.warning(self, "Already Running in Loop", f"'{program_name}' is already running in a loop.")
+            return
+
+        loop_interval = self.loop_interval_spinner.value()
+        program_path = os.path.join(self.folder_path, program_name)
+
+        future = self.executor.submit(self.loop_execution, program_name, program_path, loop_interval)
+        self.looped_programs[program_name] = future
+        self.loop_program_list.addItem(program_name)
+
+    def loop_execution(self, program_name, program_path, interval):
+        while program_name in self.looped_programs:
+            try:
+                process = subprocess.Popen(
+                    [sys.executable, program_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                stdout, stderr = process.communicate()
+
+                if process.returncode == 0:
+                    output = f"[Loop Output] {program_name}:\n{stdout}"
+                else:
+                    output = f"[Loop Error] {program_name}:\n{stderr}"
+
+                self.update_output(output)
+                self.update_history(program_name, process.returncode == 0)
+
+            except Exception as e:
+                self.update_output(f"Loop execution error for {program_name}: {str(e)}")
+                break
+
+            time.sleep(interval)
+
+    def stop_loop(self):
+        selected_item = self.loop_program_list.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "No Selection", "Please select a looped program to stop.")
+            return
+
+        program_name = selected_item.text()
+        if program_name in self.looped_programs:
+            del self.looped_programs[program_name]
+
+            # Remove from the looped program list in UI
+            for i in range(self.loop_program_list.count()):
+                if self.loop_program_list.item(i).text() == program_name:
+                    self.loop_program_list.takeItem(i)
+                    break
+
+            QMessageBox.information(self, "Stopped", f"Loop execution for '{program_name}' has been stopped.")
