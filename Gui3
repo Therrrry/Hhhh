@@ -1,0 +1,346 @@
+import os
+import sys
+import time
+from collections import deque
+from concurrent.futures import ThreadPoolExecutor
+from PyQt5.QtWidgets import (
+    QApplication, QMainWindow, QVBoxLayout, QPushButton, QFileDialog,
+    QListWidget, QLineEdit, QWidget, QMessageBox, QLabel, QHBoxLayout, QScrollArea,
+    QSplitter, QTextEdit, QSpinBox
+)
+from PyQt5.QtCore import Qt
+import subprocess
+
+class ProgramRunnerApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Program Runner")
+        self.setGeometry(100, 100, 1200, 800)  # Increased window size
+
+        self.central_widget = QWidget()
+        self.setCentralWidget(self.central_widget)
+
+        self.layout = QVBoxLayout(self.central_widget)
+
+        # Create a splitter for the vertical partition
+        self.splitter = QSplitter(Qt.Vertical)
+        self.layout.addWidget(self.splitter)
+
+        # Top Section: Program selection and execution
+        self.top_widget = QWidget()
+        self.top_layout = QVBoxLayout(self.top_widget)
+
+        # Folder selection
+        folder_layout = QHBoxLayout()
+        self.folder_label = QLabel("Folder: Not Selected")
+        self.select_folder_button = QPushButton("Select Folder")
+        self.select_folder_button.clicked.connect(self.select_folder)
+        folder_layout.addWidget(self.folder_label)
+        folder_layout.addWidget(self.select_folder_button)
+        self.top_layout.addLayout(folder_layout)
+
+        # Search bar
+        self.search_bar = QLineEdit()
+        self.search_bar.setPlaceholderText("Search programs...")
+        self.search_bar.textChanged.connect(self.filter_programs)
+        self.top_layout.addWidget(self.search_bar)
+
+        # Program list
+        self.program_list = QListWidget()
+        self.program_list.setMinimumHeight(300)  # Increased the height of the selection area
+        self.top_layout.addWidget(self.program_list)
+
+        # Run and cancel buttons
+        run_cancel_layout = QHBoxLayout()
+        self.run_button = QPushButton("Run Selected Program")
+        self.run_button.clicked.connect(self.run_selected_program)
+        self.cancel_button = QPushButton("Cancel Execution")
+        self.cancel_button.clicked.connect(self.cancel_execution)
+        run_cancel_layout.addWidget(self.run_button)
+        run_cancel_layout.addWidget(self.cancel_button)
+        self.top_layout.addLayout(run_cancel_layout)
+
+        # Scrollable Area for Output
+        self.output_area = QScrollArea()
+        self.output_label = QLabel()
+        self.output_label.setWordWrap(True)
+        self.output_area.setWidgetResizable(True)
+        self.output_area.setWidget(self.output_label)
+        self.top_layout.addWidget(self.output_area)
+
+        self.splitter.addWidget(self.top_widget)
+
+        # Bottom Section: Excel linking and run history
+        self.bottom_widget = QWidget()
+        self.bottom_layout = QVBoxLayout(self.bottom_widget)
+
+        # Excel linking controls
+        excel_layout = QHBoxLayout()
+        self.excel_label = QLabel("Excel: Not Selected")
+        self.select_excel_button = QPushButton("Select Excel")
+        self.select_excel_button.clicked.connect(self.select_excel)
+        self.link_button = QPushButton("Link")
+        self.link_button.clicked.connect(self.link_excel)
+        self.unlink_button = QPushButton("Unlink")
+        self.unlink_button.clicked.connect(self.unlink_excel)
+        excel_layout.addWidget(self.excel_label)
+        excel_layout.addWidget(self.select_excel_button)
+        excel_layout.addWidget(self.link_button)
+        excel_layout.addWidget(self.unlink_button)
+        self.bottom_layout.addLayout(excel_layout)
+
+        # Linked programs and Excel list
+        self.linked_list = QListWidget()
+        self.bottom_layout.addWidget(self.linked_list)
+
+        # Run history
+        self.history_label = QLabel("Last 10 Runs:")
+        self.bottom_layout.addWidget(self.history_label)
+        self.history_list = QListWidget()
+        self.history_list.itemDoubleClicked.connect(self.rerun_from_history)
+        self.bottom_layout.addWidget(self.history_list)
+
+        # Loop controls
+        loop_layout = QHBoxLayout()
+        self.loop_program_list = QListWidget()
+        self.loop_program_list.setMinimumHeight(100)
+        loop_controls = QVBoxLayout()
+
+        self.loop_interval_label = QLabel("Loop Interval (seconds):")
+        self.loop_interval_spinner = QSpinBox()
+        self.loop_interval_spinner.setRange(1, 3600)
+        self.loop_interval_spinner.setValue(10)
+
+        self.run_loop_button = QPushButton("Run in Loop")
+        self.run_loop_button.clicked.connect(self.run_in_loop)
+        self.stop_loop_button = QPushButton("Stop Loop")
+        self.stop_loop_button.clicked.connect(self.stop_loop)
+
+        loop_controls.addWidget(self.loop_interval_label)
+        loop_controls.addWidget(self.loop_interval_spinner)
+        loop_controls.addWidget(self.run_loop_button)
+        loop_controls.addWidget(self.stop_loop_button)
+
+        loop_layout.addWidget(self.loop_program_list)
+        loop_layout.addLayout(loop_controls)
+        self.bottom_layout.addLayout(loop_layout)
+
+        self.splitter.addWidget(self.bottom_widget)
+
+        # Data
+        self.folder_path = "D:\\Ptu"  # Default folder path
+        self.folder_label.setText(f"Folder: {self.folder_path}")
+        self.load_programs()  # Automatically load programs from the default folder
+
+        self.executor = ThreadPoolExecutor(max_workers=6)
+        self.running_processes = {}
+        self.looped_programs = {}
+        self.run_history = deque(maxlen=10)
+        self.linked_combinations = {}
+
+    def select_folder(self):
+        folder = QFileDialog.getExistingDirectory(self, "Select Folder")
+        if folder:
+            self.folder_path = folder
+            self.folder_label.setText(f"Folder: {folder}")
+            self.load_programs()
+
+    def load_programs(self):
+        if not self.folder_path:
+            return
+
+        self.programs = [
+            f for f in os.listdir(self.folder_path) if f.endswith(".py")
+        ]
+        self.program_list.clear()
+        self.program_list.addItems(self.programs)
+
+    def filter_programs(self):
+        search_text = self.search_bar.text().lower()
+        filtered_programs = [
+            program for program in self.programs if search_text in program.lower()
+        ]
+        self.program_list.clear()
+        self.program_list.addItems(filtered_programs)
+
+    def run_selected_program(self):
+        if len(self.running_processes) >= 6:
+            QMessageBox.warning(self, "Limit Reached", "Maximum of 6 programs can run concurrently.")
+            return
+
+        selected_item = self.program_list.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "No Selection", "Please select a program to run.")
+            return
+
+        program_name = selected_item.text()
+        program_path = os.path.join(self.folder_path, program_name)
+
+        if program_name in self.running_processes:
+            QMessageBox.warning(self, "Already Running", f"Program '{program_name}' is already running.")
+            return
+
+        future = self.executor.submit(self.execute_program, program_name, program_path)
+        self.running_processes[program_name] = future
+
+    def execute_program(self, program_name, program_path):
+        try:
+            process = subprocess.Popen(
+                [sys.executable, program_path],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            stdout, stderr = process.communicate()
+
+            if process.returncode == 0:
+                output = f"Output of {program_name}:
+{stdout}"
+            else:
+                output = f"Error in {program_name}:
+{stderr}"
+
+            self.update_output(output)
+            self.update_history(program_name, process.returncode == 0)
+
+        except Exception as e:
+            QMessageBox.critical(self, "Error", f"Failed to run program: {str(e)}")
+        finally:
+            del self.running_processes[program_name]
+
+    def update_output(self, output):
+        self.output_label.setText(output)
+
+    def update_history(self, program_name, success):
+        status = "Success" if success else "Error"
+        run_entry = f"{program_name} - {status}"
+        if run_entry not in self.run_history:
+            self.run_history.appendleft(run_entry)
+        self.history_list.clear()
+        self.history_list.addItems(self.run_history)
+
+    def rerun_from_history(self, item):
+        program_name = item.text().split(" - ")[0]
+        program_path = os.path.join(self.folder_path, program_name)
+        self.run_selected_program()
+
+    def cancel_execution(self):
+        selected_item = self.program_list.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "No Selection", "Please select a running program to cancel.")
+            return
+
+        program_name = selected_item.text()
+        if program_name not in self.running_processes:
+            QMessageBox.warning(self, "Not Running", f"Program '{program_name}' is not currently running.")
+            return
+
+        future = self.running_processes.pop(program_name)
+        future.cancel()
+        QMessageBox.information(self, "Cancelled", f"Execution of '{program_name}' has been cancelled.")
+
+    def select_excel(self):
+        file, _ = QFileDialog.getOpenFileName(self, "Select Excel File", "", "Excel Files (*.xlsx)")
+        if file:
+            self.excel_label.setText(f"Excel: {file}")
+
+        def link_excel(self):
+        selected_item = self.program_list.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "No Selection", "Please select a program to link.")
+            return
+
+        program_name = selected_item.text()
+        excel_path = self.excel_label.text().replace("Excel: ", "").strip()
+
+        if not excel_path or excel_path == "Not Selected":
+            QMessageBox.warning(self, "No Excel Selected", "Please select an Excel file to link.")
+            return
+
+        if program_name in self.linked_combinations:
+            QMessageBox.warning(self, "Already Linked", f"'{program_name}' is already linked to an Excel file.")
+            return
+
+        self.linked_combinations[program_name] = excel_path
+        self.update_linked_list()
+
+        QMessageBox.information(self, "Linked", f"'{program_name}' has been linked to '{excel_path}'.")
+
+    def unlink_excel(self):
+        selected_item = self.linked_list.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "No Selection", "Please select a linked program to unlink.")
+            return
+
+        program_name = selected_item.text().split(" -> ")[0]  # Extract program name
+        if program_name in self.linked_combinations:
+            del self.linked_combinations[program_name]
+            self.update_linked_list()
+
+            QMessageBox.information(self, "Unlinked", f"'{program_name}' has been unlinked.")
+
+    def update_linked_list(self):
+        self.linked_list.clear()
+        unique_combinations = {f"{program} -> {excel}" for program, excel in self.linked_combinations.items()}
+        self.linked_list.addItems(sorted(unique_combinations))
+
+    def run_in_loop(self):
+        selected_item = self.program_list.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "No Selection", "Please select a program to run in a loop.")
+            return
+
+        program_name = selected_item.text()
+        if program_name in self.looped_programs:
+            QMessageBox.warning(self, "Already Running in Loop", f"'{program_name}' is already running in a loop.")
+            return
+
+        loop_interval = self.loop_interval_spinner.value()
+        program_path = os.path.join(self.folder_path, program_name)
+
+        future = self.executor.submit(self.loop_execution, program_name, program_path, loop_interval)
+        self.looped_programs[program_name] = future
+        self.loop_program_list.addItem(program_name)
+
+    def loop_execution(self, program_name, program_path, interval):
+        while program_name in self.looped_programs:
+            try:
+                process = subprocess.Popen(
+                    [sys.executable, program_path],
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    text=True
+                )
+                stdout, stderr = process.communicate()
+
+                if process.returncode == 0:
+                    output = f"[Loop Output] {program_name}:\n{stdout}"
+                else:
+                    output = f"[Loop Error] {program_name}:\n{stderr}"
+
+                self.update_output(output)
+                self.update_history(program_name, process.returncode == 0)
+
+            except Exception as e:
+                self.update_output(f"Loop execution error for {program_name}: {str(e)}")
+                break
+
+            time.sleep(interval)
+
+    def stop_loop(self):
+        selected_item = self.loop_program_list.currentItem()
+        if not selected_item:
+            QMessageBox.warning(self, "No Selection", "Please select a looped program to stop.")
+            return
+
+        program_name = selected_item.text()
+        if program_name in self.looped_programs:
+            del self.looped_programs[program_name]
+
+            # Remove from the looped program list in UI
+            for i in range(self.loop_program_list.count()):
+                if self.loop_program_list.item(i).text() == program_name:
+                    self.loop_program_list.takeItem(i)
+                    break
+
+            QMessageBox.information(self, "Stopped", f"Loop execution for '{program_name}' has been stopped.")
