@@ -1,6 +1,4 @@
 import re
-import ast
-from pyparsing import nestedExpr
 
 def parse_c_code(c_code):
     """
@@ -44,16 +42,30 @@ def extract_function_body(c_code, start_index):
     """
     stack = []
     body = []
+    in_body = False
+
     for i in range(start_index, len(c_code)):
         char = c_code[i]
         if char == '{':
             stack.append('{')
+            in_body = True  # Start of the function body
         elif char == '}':
-            stack.pop()
+            if stack:
+                stack.pop()
+            else:
+                # Unmatched closing brace, ignore or handle error
+                raise ValueError("Unmatched closing brace in code.")
             if not stack:
+                in_body = False  # End of the function body
+                body.append(char)
                 break
-        if stack:
+        if in_body:
             body.append(char)
+
+    if stack:
+        # Handle unmatched opening braces
+        raise ValueError("Unmatched opening brace in code.")
+
     return ''.join(body)
 
 def extract_function_calls(function_body):
@@ -132,4 +144,3 @@ if __name__ == "__main__":
     # To render the diagram, save to a .puml file and use PlantUML
     with open("sequence_diagram.puml", "w") as file:
         file.write(sequence_diagram)
-                          
