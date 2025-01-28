@@ -1,0 +1,52 @@
+import os
+import subprocess
+
+def convert_puml_to_jpg(puml_file, jar_file="plantuml.jar", output_dir=None):
+    """
+    Convert a .puml file to a .jpg image using PlantUML.
+    
+    Parameters:
+    - puml_file: Path to the .puml file.
+    - jar_file: Path to the plantuml.jar file (default: "plantuml.jar").
+    - output_dir: Optional directory to save the .jpg file (default: same as .puml file).
+    """
+    try:
+        # Ensure the .puml and .jar files exist
+        if not os.path.exists(puml_file):
+            raise FileNotFoundError(f".puml file not found: {puml_file}")
+        if not os.path.exists(jar_file):
+            raise FileNotFoundError(f"plantuml.jar not found: {jar_file}")
+        
+        # Construct the command
+        command = ["java", "-jar", jar_file, "-tjpg", puml_file]
+        
+        # If output directory is specified, add the -o option
+        if output_dir:
+            command.extend(["-o", output_dir])
+        
+        # Run the command
+        subprocess.run(command, check=True)
+        
+        # Output file path
+        jpg_file = os.path.join(
+            output_dir if output_dir else os.path.dirname(puml_file),
+            os.path.basename(puml_file).replace(".puml", ".jpg")
+        )
+        print(f"Converted: {puml_file} -> {jpg_file}")
+    
+    except FileNotFoundError as e:
+        print(e)
+    except subprocess.CalledProcessError:
+        print(f"Failed to convert {puml_file} to .jpg.")
+    except Exception as e:
+        print(f"An error occurred: {e}")
+
+if __name__ == "__main__":
+    # Folder containing the .puml and plantuml.jar
+    folder = "D:\\"
+    puml_file = os.path.join(folder, "diagram.puml")
+    jar_file = os.path.join(folder, "plantuml.jar")
+    output_dir = folder  # Optional: specify a different output directory
+    
+    # Convert the .puml to .jpg
+    convert_puml_to_jpg(puml_file, jar_file, output_dir)
