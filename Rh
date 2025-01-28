@@ -1,0 +1,139 @@
+import sys
+import os
+import re
+from PyQt5.QtWidgets import (QApplication, QMainWindow, QVBoxLayout, QWidget,
+                             QPushButton, QFileDialog, QTextEdit, QSplitter, QHBoxLayout, QGraphicsView, QGraphicsScene)
+from PyQt5.QtCore import Qt, QUrl
+from PyQt5.QtGui import QPen, QBrush, QColor
+from pycparser import CParser, c_ast
+import networkx as nx
+
+class UMLSequenceDiagramApp(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("Reverse Engineer C Code to UML Sequence Diagram")
+        self.setGeometry(100, 100, 1600, 900)
+        self.init_ui()
+
+    def init_ui(self):
+        self.main_layout = QVBoxLayout()
+        self.create_buttons()
+        self.create_editor_and_viewer()
+        self.set_main_widget()
+
+    def create_buttons(self):
+        self.button_layout = QHBoxLayout()
+
+        self.load_button = QPushButton("Load C Code")
+        self.load_button.clicked.connect(self.load_code)
+        
+        self.generate_button = QPushButton("Generate Diagram")
+        self.generate_button.setEnabled(False)
+        self.generate_button.clicked.connect(self.generate_diagram)
+
+        self.export_button = QPushButton("Export Diagram")
+        self.export_button.setEnabled(False)
+        self.export_button.clicked.connect(self.export_diagram)
+
+        self.button_layout.addWidget(self.load_button)
+        self.button_layout.addWidget(self.generate_button)
+        self.button_layout.addWidget(self.export_button)
+        
+        self.main_layout.addLayout(self.button_layout)
+
+    def create_editor_and_viewer(self):
+        self.code_editor = QTextEdit()
+        self.code_editor.setReadOnly(True)
+        
+        self.diagram_view = QGraphicsView()
+        self.diagram_scene = QGraphicsScene()
+        self.diagram_view.setScene(self.diagram_scene)
+
+        self.splitter = QSplitter(Qt.Horizontal)
+        self.splitter.addWidget(self.code_editor)
+        self.splitter.addWidget(self.diagram_view)
+        self.splitter.setStretchFactor(0, 1)
+        self.splitter.setStretchFactor(1, 2)
+
+        self.main_layout.addWidget(self.splitter)
+
+    def set_main_widget(self):
+        self.container = QWidget()
+        self.container.setLayout(self.main_layout)
+        self.setCentralWidget(self.container)
+
+    def load_code(self):
+        file_name, _ = QFileDialog.getOpenFileName(self, "Open C File", "", "C Files (*.c);;All Files (*)")
+        if file_name:
+            with open(file_name, 'r') as file:
+                self.code_content = file.read()
+                self.code_editor.setText(self.code_content)
+                self.generate_button.setEnabled(True)
+
+    def generate_diagram(self):
+        if not hasattr(self, 'code_content'):
+            return
+
+        parser = CParser()
+        ast = parser.parse(self.code_content)
+
+        functions = self.extract_functions(ast)
+        self.create_sequence_diagram(functions)
+        self.export_button.setEnabled(True)
+
+    def extract_functions(self, ast):
+        functions = {}
+
+        class FunctionVisitor(c_ast.NodeVisitor):
+            def visit_FuncDef(self, node):
+                func_name = node.decl.name
+                calls = []
+
+                class CallVisitor(c_ast.NodeVisitor):
+                    def visit_FuncCall(self, call_node):
+                        if call_node.name and isinstance(call_node.name, c_ast.ID):
+                            calls.append(call_node.name.name)
+
+                CallVisitor().visit(node.body)
+                functions[func_name] = calls
+
+        FunctionVisitor().visit(ast)
+        return functions
+
+    def create_sequence_diagram(self, functions):
+        self.diagram_scene.clear()
+
+        pen = QPen(QColor("black"))
+        brush = QBrush(QColor("lightblue"))
+
+        node_positions = {}
+        x, y = 100, 100
+        node_spacing = 200
+
+        for i, func in enumerate(functions):
+            rect = self.diagram_scene.addRect(x, y, 150, 50, pen, brush)
+            text = self.diagram_scene.addText(func)
+            text.setPos(x + 10, y + 10)
+            node_positions[func] = (x + 75, y + 50)
+            y += node_spacing
+
+        for src, calls in functions.items():
+            if src in node_positions:
+                src_x, src_y = node_positions[src]
+                for dst in calls:
+                    if dst in node_positions:
+                        dst_x, dst_y = node_positions[dst]
+                        self.diagram_scene.addLine(src_x, src_y, dst_x, dst_y, pen)
+
+    def export_diagram(self):
+        file_name, _ = QFileDialog.getSaveFileName(self, "Export Diagram", "diagram.png", "Images (*.png);;All Files (*)")
+        if file_name:
+            image = self.diagram_scene.itemsBoundingRect()
+            pixmap = self.diagram_scene.rendered(image.size().toSize())
+            pixmap.save(file_name, "PNG")
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    main_window = UMLSequenceDiagramApp()
+    main_window.show()
+    sys.exit(app.exec_())
