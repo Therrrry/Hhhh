@@ -1,0 +1,135 @@
+import re
+import ast
+from pyparsing import nestedExpr
+
+def parse_c_code(c_code):
+    """
+    Parse a C code to extract functions, calls, and comments.
+    """
+    functions = {}
+    comments = []
+
+    # Extract comments
+    comment_pattern = re.compile(r"//.*|/\*.*?\*/", re.DOTALL)
+    for comment in re.findall(comment_pattern, c_code):
+        comments.append(comment.strip())
+
+    # Extract function definitions
+    function_pattern = re.compile(r"\b(\w+)\s+(\w+)\s*\(([^)]*)\)\s*\{")
+    matches = list(re.finditer(function_pattern, c_code))
+
+    for match in matches:
+        return_type, function_name, arguments = match.groups()
+        arguments = [arg.strip() for arg in arguments.split(",") if arg.strip()]
+        function_body_start = match.end()
+
+        # Find function body
+        function_body = extract_function_body(c_code, function_body_start)
+
+        # Extract function calls in the body
+        calls = extract_function_calls(function_body)
+
+        functions[function_name] = {
+            "return_type": return_type,
+            "arguments": arguments,
+            "body": function_body,
+            "calls": calls,
+        }
+
+    return comments, functions
+
+def extract_function_body(c_code, start_index):
+    """
+    Extract the body of a function using nested brace parsing.
+    """
+    stack = []
+    body = []
+    for i in range(start_index, len(c_code)):
+        char = c_code[i]
+        if char == '{':
+            stack.append('{')
+        elif char == '}':
+            stack.pop()
+            if not stack:
+                break
+        if stack:
+            body.append(char)
+    return ''.join(body)
+
+def extract_function_calls(function_body):
+    """
+    Extract function calls from a function body.
+    """
+    call_pattern = re.compile(r"\b(\w+)\s*\(([^)]*)\)")
+    calls = []
+    for match in re.finditer(call_pattern, function_body):
+        function_name, arguments = match.groups()
+        calls.append({
+            "function": function_name,
+            "arguments": [arg.strip() for arg in arguments.split(",") if arg.strip()],
+        })
+    return calls
+
+def generate_sequence_diagram(c_code):
+    """
+    Generate a sequence diagram in PlantUML format from C code.
+    """
+    comments, functions = parse_c_code(c_code)
+
+    # Start the sequence diagram in PlantUML format
+    uml_lines = ["@startuml", "actor User"]
+
+    # Add function definitions and calls
+    for function_name, details in functions.items():
+        uml_lines.append(f"User -> {function_name}: Call")
+        uml_lines.append(f"activate {function_name}")
+
+        for call in details['calls']:
+            uml_lines.append(f"{function_name} -> {call['function']}: {', '.join(call['arguments'])}")
+            uml_lines.append(f"activate {call['function']}")
+            uml_lines.append(f"{call['function']} --> {function_name}: return")
+            uml_lines.append(f"deactivate {call['function']}")
+
+        uml_lines.append(f"{function_name} --> User: return")
+        uml_lines.append(f"deactivate {function_name}")
+
+    # Add comments as notes
+    for comment in comments:
+        uml_lines.append(f"note left: {comment}")
+
+    # End the sequence diagram
+    uml_lines.append("@enduml")
+
+    return "\n".join(uml_lines)
+
+if __name__ == "__main__":
+    # Example C code snippet
+    c_code = """
+    /* Example C function */
+    void exampleFunction(int a, int b) {
+        // Initialize variables
+        int sum = a + b;
+
+        // Call helper function
+        helperFunction(sum);
+    }
+
+    void helperFunction(int value) {
+        // Print value
+        printf("Value: %d\n", value);
+    }
+
+    void anotherFunction() {
+        exampleFunction(5, 10);
+        helperFunction(15);
+    }
+    """
+
+    # Generate and print the sequence diagram
+    sequence_diagram = generate_sequence_diagram(c_code)
+    print(sequence_diagram)
+
+    # To render the diagram, save to a .puml file and use PlantUML
+    with open("sequence_diagram.puml", "w") as file:
+        file.write(sequence_diagram)
+                          
