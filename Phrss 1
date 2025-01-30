@@ -1,7 +1,7 @@
 import sys
 import os
-import subprocess
 import tempfile
+import clang.cindex  # pip install clang
 from PyQt5.QtWidgets import (
     QApplication,
     QWidget,
@@ -12,7 +12,12 @@ from PyQt5.QtWidgets import (
     QLabel,
     QMessageBox
 )
-from pycparser import CParser, c_ast
+
+############################################
+#  If clang is not auto-detected:
+#  uncomment and set your local clang path:
+# clang.cindex.Config.set_library_file("/usr/lib/llvm-12/lib/libclang.so")
+############################################
 
 class ASTViewer(QWidget):
     def __init__(self):
@@ -20,47 +25,53 @@ class ASTViewer(QWidget):
         self.initUI()
 
     def initUI(self):
-        self.setWindowTitle("C AST Generator")
+        self.setWindowTitle("Clang-based C AST Generator")
         self.setGeometry(100, 100, 900, 700)
 
         layout = QVBoxLayout()
 
-        # Label
-        self.label_instructions = QLabel("""<b>Steps to Use:</b><br>
-1) Load a C file or paste your C code in the text box.<br>
-2) Click 'Extract AST' to parse the code and display the AST.<br><br>
-<b>Note:</b> If your code uses macros or #includes, you need 'gcc' installed.<br>
-""")
-        layout.addWidget(self.label_instructions)
+        # Intro Label
+        instructions_text = """<b>Steps to Use:</b><br>
+1) Install Clang + Python bindings (libclang).<br>
+2) Paste or load your C code below.<br>
+3) Click 'Generate AST' to parse with Clang.<br>
+4) The AST appears in the text box at the bottom.<br><br>
+<b>If you get errors:</b><br>
+- Ensure Clang is installed & \"libclang\" is findable.<br>
+- Code must be valid C (or add the right compiler flags).<br>
+- Possibly uncomment and set the library file path in the code.
+"""
+        self.instructions = QLabel(instructions_text)
+        layout.addWidget(self.instructions)
 
         # Buttons
-        self.loadButton = QPushButton("Load C File")
-        self.loadButton.clicked.connect(self.loadFile)
-        layout.addWidget(self.loadButton)
+        self.loadBtn = QPushButton("Load C File")
+        self.loadBtn.clicked.connect(self.load_c_file)
+        layout.addWidget(self.loadBtn)
 
-        self.extractButton = QPushButton("Extract AST")
-        self.extractButton.clicked.connect(self.extractAST)
-        layout.addWidget(self.extractButton)
+        self.parseBtn = QPushButton("Generate AST")
+        self.parseBtn.clicked.connect(self.parse_code)
+        layout.addWidget(self.parseBtn)
 
-        # Code Input
-        self.codeInputLabel = QLabel("Paste or Edit C Code Below:")
-        layout.addWidget(self.codeInputLabel)
+        # Code Input Area
+        self.codeLabel = QLabel("Paste or Edit C Code Below:")
+        layout.addWidget(self.codeLabel)
 
-        self.codeInput = QTextEdit()
-        layout.addWidget(self.codeInput)
+        self.codeEdit = QTextEdit()
+        layout.addWidget(self.codeEdit)
 
-        # AST Output
-        self.astLabel = QLabel("Abstract Syntax Tree:")
+        # AST Output Area
+        self.astLabel = QLabel("Clang AST Output:")
         layout.addWidget(self.astLabel)
 
-        self.astText = QTextEdit()
-        self.astText.setReadOnly(True)
-        layout.addWidget(self.astText)
+        self.astOutput = QTextEdit()
+        self.astOutput.setReadOnly(True)
+        layout.addWidget(self.astOutput)
 
         self.setLayout(layout)
 
-    def loadFile(self):
-        """Load a C file from disk and display its contents in the text box."""
+    def load_c_file(self):
+        """Opens a file chooser to load a .c file into the text area."""
         options = QFileDialog.Options()
         filePath, _ = QFileDialog.getOpenFileName(
             self,
@@ -69,90 +80,79 @@ class ASTViewer(QWidget):
             "C Files (*.c);;All Files (*)",
             options=options
         )
-
         if filePath:
             try:
                 with open(filePath, "r", encoding="utf-8", errors="ignore") as f:
-                    file_content = f.read()
-                self.codeInput.setPlainText(file_content)
-                self.astText.setText("C Code Loaded. Click 'Extract AST' to generate AST.")
+                    code = f.read()
+                self.codeEdit.setText(code)
+                self.astOutput.setText("Loaded file. Click 'Generate AST' to parse.")
             except Exception as e:
                 QMessageBox.critical(self, "Error", f"Failed to load file:\n{e}")
 
-    def extractAST(self):
-        """Get the code from the text box, preprocess (if possible), and parse it."""
-        code_str = self.codeInput.toPlainText()
+    def parse_code(self):
+        """Parses the C code (pasted or loaded) using libclang and displays its AST."""
+        code_str = self.codeEdit.toPlainText()
         if not code_str.strip():
-            self.astText.setText("No C code provided.")
+            self.astOutput.setText("No C code provided.")
             return
 
-        # Attempt to preprocess code (requires gcc)
-        preprocessed_code, error_msg = self.preprocess_code(code_str)
-        if error_msg:
-            # If there's an error in preprocessing, show it
-            self.astText.setText(
-                f"Preprocessing Error:\n{error_msg}\n\n"
-                "Attempting to parse without preprocessing..."
-            )
-            # Attempt to parse without preprocessing
-            self.parse_and_display_ast(code_str)
-        else:
-            # Parse the preprocessed code
-            self.parse_and_display_ast(preprocessed_code)
-
-    def preprocess_code(self, code_str):
-        """Preprocess the code using gcc -E. Returns (preprocessed_code, error_msg)."""
-        # We'll write the code to a temporary file, run gcc -E on it.
-        # If gcc fails, we return the original code + error message.
+        # Write to temp file for Clang
         with tempfile.NamedTemporaryFile(delete=False, suffix=".c") as tmp:
             tmp.write(code_str.encode("utf-8", errors="ignore"))
             tmp.flush()
             tmp_path = tmp.name
 
-        preprocessed_code = None
-        error_msg = None
         try:
-            result = subprocess.run(
-                ["gcc", "-E", tmp_path],
-                capture_output=True,
-                text=True,
-                check=False
-            )
+            index = clang.cindex.Index.create()
 
-            if result.returncode == 0:
-                preprocessed_code = result.stdout
-            else:
-                error_msg = result.stderr
-        except FileNotFoundError:
-            # "gcc" not found
-            error_msg = "gcc not found on system. Please install GCC or parse without preprocessing."
+            # Provide standard flags for C parsing. Adjust if needed (C99, C17, etc.).
+            # You can also add -I / -D flags to handle includes/macros as needed.
+            tu = index.parse(tmp_path, args=["-std=c11", "-I.", "-ferror-limit=0"])
+
+            if not tu or not tu.cursor:
+                self.astOutput.setText("Clang failed to parse the code (no translation unit).")
+                return
+
+            # If Clang encountered errors, show them:
+            diagnostics = tu.diagnostics
+            err_msg = []
+            for diag in diagnostics:
+                if diag.severity >= clang.cindex.Diagnostic.Error:
+                    err_msg.append(f"{diag.spelling} (Line {diag.location.line})")
+            if err_msg:
+                self.astOutput.setText(
+                    "Clang reported errors:\n" + "\n".join(err_msg) +
+                    "\n\nAttempting to display partial AST below...\n"
+                )
+
+            # Recursively build AST output
+            ast_str = self.build_ast_text(tu.cursor)
+            self.astOutput.append(ast_str)
+
         except Exception as e:
-            error_msg = str(e)
+            self.astOutput.setText(f"Error parsing code with clang:\n{e}")
         finally:
+            # Clean up temp file
             try:
                 os.remove(tmp_path)
             except OSError:
                 pass
 
-        return (preprocessed_code, error_msg)
+    def build_ast_text(self, node, depth=0):
+        """Recursively traverse Clang AST and format as a text tree."""
+        indent = '  ' * depth
+        # Node kind & its name (spelling)
+        node_info = f"{indent}- {node.kind} | {node.spelling or ''}"
 
-    def parse_and_display_ast(self, code):
-        """Use pycparser to parse code and display the AST."""
-        parser = CParser()
-        try:
-            ast = parser.parse(code)
-            ast_str = self.get_ast_text(ast)
-            self.astText.setText(ast_str if ast_str else "<Empty AST>")
-        except Exception as e:
-            self.astText.setText(f"Error parsing C code:\n{e}")
+        # Add file/line info if available
+        if node.location.file and node.location.file.name:
+            node_info += f"  (File: {node.location.file.name}, Line: {node.location.line})"
 
-    def get_ast_text(self, node, level=0):
-        """Recursively format AST nodes into a readable text tree."""
-        result = ""
-        if isinstance(node, c_ast.Node):
-            result += "  " * level + node.__class__.__name__ + "\n"
-            for child_name, child in node.children():
-                result += self.get_ast_text(child, level + 1)
+        result = node_info + "\n"
+
+        for child in node.get_children():
+            result += self.build_ast_text(child, depth + 1)
+
         return result
 
 if __name__ == "__main__":
