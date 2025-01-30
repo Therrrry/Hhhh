@@ -26,12 +26,19 @@ class ASTViewer(QWidget):
         self.loadButton.clicked.connect(self.loadFile)
         layout.addWidget(self.loadButton)
         
+        self.pasteButton = QPushButton("Paste C Code")
+        self.pasteButton.clicked.connect(self.pasteCode)
+        layout.addWidget(self.pasteButton)
+        
         self.extractButton = QPushButton("Extract AST")
         self.extractButton.clicked.connect(self.extractAST)
         layout.addWidget(self.extractButton)
         
         self.resultLabel = QLabel("Abstract Syntax Tree:")
         layout.addWidget(self.resultLabel)
+        
+        self.codeInput = QTextEdit()
+        layout.addWidget(self.codeInput)
         
         self.astText = QTextEdit()
         self.astText.setReadOnly(True)
@@ -49,11 +56,16 @@ class ASTViewer(QWidget):
                 self.astText.setText(preprocessed_code)
             else:
                 self.c_code = preprocessed_code
+                self.codeInput.setText(self.c_code)
                 self.astText.setText("C Code Loaded. Click 'Extract AST' to generate AST.")
+    
+    def pasteCode(self):
+        self.c_code = self.codeInput.toPlainText()
+        self.astText.setText("C Code Pasted. Click 'Extract AST' to generate AST.")
         
     def extractAST(self):
         if not hasattr(self, 'c_code') or not self.c_code.strip():
-            self.astText.setText("No C code loaded. Please load a C file first.")
+            self.astText.setText("No C code loaded or pasted. Please provide C code.")
             return
         
         parser = CParser()
