@@ -1,6 +1,15 @@
 import sys
+import subprocess
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QTextEdit, QFileDialog, QLabel
 from pycparser import CParser, c_ast
+
+def preprocess_c_code(file_path):
+    """Preprocess the C code using gcc -E to handle macros and includes."""
+    try:
+        result = subprocess.run(["gcc", "-E", file_path], capture_output=True, text=True, check=True)
+        return result.stdout
+    except subprocess.CalledProcessError as e:
+        return f"Error in preprocessing: {e.stderr}"
 
 class ASTViewer(QWidget):
     def __init__(self):
@@ -35,9 +44,12 @@ class ASTViewer(QWidget):
         filePath, _ = QFileDialog.getOpenFileName(self, "Open C File", "", "C Files (*.c);;All Files (*)", options=options)
         
         if filePath:
-            with open(filePath, "r") as file:
-                self.c_code = file.read()
-            self.astText.setText("C Code Loaded. Click 'Extract AST' to generate AST.")
+            preprocessed_code = preprocess_c_code(filePath)
+            if "Error" in preprocessed_code:
+                self.astText.setText(preprocessed_code)
+            else:
+                self.c_code = preprocessed_code
+                self.astText.setText("C Code Loaded. Click 'Extract AST' to generate AST.")
         
     def extractAST(self):
         if not hasattr(self, 'c_code') or not self.c_code.strip():
@@ -53,7 +65,7 @@ class ASTViewer(QWidget):
     
     def get_ast_text(self, node, level=0):
         """Recursively format AST nodes into readable text."""
-        result = """
+        result = ""
         if isinstance(node, c_ast.Node):
             result += "  " * level + node.__class__.__name__ + "\n"
             for child_name, child in node.children():
@@ -65,3 +77,4 @@ if __name__ == "__main__":
     viewer = ASTViewer()
     viewer.show()
     sys.exit(app.exec_())
+
