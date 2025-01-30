@@ -1,89 +1,160 @@
 import sys
+import os
 import subprocess
-from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QTextEdit, QFileDialog, QLabel
+import tempfile
+from PyQt5.QtWidgets import (
+    QApplication,
+    QWidget,
+    QVBoxLayout,
+    QPushButton,
+    QTextEdit,
+    QFileDialog,
+    QLabel,
+    QMessageBox
+)
 from pycparser import CParser, c_ast
-
-def preprocess_c_code(file_path):
-    """Preprocess the C code using gcc -E to handle macros and includes."""
-    try:
-        result = subprocess.run(["gcc", "-E", file_path], capture_output=True, text=True, check=True)
-        return result.stdout
-    except subprocess.CalledProcessError as e:
-        return f"Error in preprocessing: {e.stderr}"
 
 class ASTViewer(QWidget):
     def __init__(self):
         super().__init__()
         self.initUI()
-    
+
     def initUI(self):
         self.setWindowTitle("C AST Generator")
-        self.setGeometry(100, 100, 800, 600)
-        
+        self.setGeometry(100, 100, 900, 700)
+
         layout = QVBoxLayout()
-        
+
+        # Label
+        self.label_instructions = QLabel("""<b>Steps to Use:</b><br>
+1) Load a C file or paste your C code in the text box.<br>
+2) Click 'Extract AST' to parse the code and display the AST.<br><br>
+<b>Note:</b> If your code uses macros or #includes, you need 'gcc' installed.<br>
+""")
+        layout.addWidget(self.label_instructions)
+
+        # Buttons
         self.loadButton = QPushButton("Load C File")
         self.loadButton.clicked.connect(self.loadFile)
         layout.addWidget(self.loadButton)
-        
-        self.pasteButton = QPushButton("Paste C Code")
-        self.pasteButton.clicked.connect(self.pasteCode)
-        layout.addWidget(self.pasteButton)
-        
+
         self.extractButton = QPushButton("Extract AST")
         self.extractButton.clicked.connect(self.extractAST)
         layout.addWidget(self.extractButton)
-        
-        self.resultLabel = QLabel("Abstract Syntax Tree:")
-        layout.addWidget(self.resultLabel)
-        
+
+        # Code Input
+        self.codeInputLabel = QLabel("Paste or Edit C Code Below:")
+        layout.addWidget(self.codeInputLabel)
+
         self.codeInput = QTextEdit()
         layout.addWidget(self.codeInput)
-        
+
+        # AST Output
+        self.astLabel = QLabel("Abstract Syntax Tree:")
+        layout.addWidget(self.astLabel)
+
         self.astText = QTextEdit()
         self.astText.setReadOnly(True)
         layout.addWidget(self.astText)
-        
+
         self.setLayout(layout)
-        
+
     def loadFile(self):
+        """Load a C file from disk and display its contents in the text box."""
         options = QFileDialog.Options()
-        filePath, _ = QFileDialog.getOpenFileName(self, "Open C File", "", "C Files (*.c);;All Files (*)", options=options)
-        
+        filePath, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open C File",
+            "",
+            "C Files (*.c);;All Files (*)",
+            options=options
+        )
+
         if filePath:
-            preprocessed_code = preprocess_c_code(filePath)
-            if "Error" in preprocessed_code:
-                self.astText.setText(preprocessed_code)
-            else:
-                self.c_code = preprocessed_code
-                self.codeInput.setText(self.c_code)
+            try:
+                with open(filePath, "r", encoding="utf-8", errors="ignore") as f:
+                    file_content = f.read()
+                self.codeInput.setPlainText(file_content)
                 self.astText.setText("C Code Loaded. Click 'Extract AST' to generate AST.")
-    
-    def pasteCode(self):
-        self.c_code = self.codeInput.toPlainText()
-        self.astText.setText("C Code Pasted. Click 'Extract AST' to generate AST.")
-        
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to load file:\n{e}")
+
     def extractAST(self):
-        if not hasattr(self, 'c_code') or not self.c_code.strip():
-            self.astText.setText("No C code loaded or pasted. Please provide C code.")
+        """Get the code from the text box, preprocess (if possible), and parse it."""
+        code_str = self.codeInput.toPlainText()
+        if not code_str.strip():
+            self.astText.setText("No C code provided.")
             return
-        
+
+        # Attempt to preprocess code (requires gcc)
+        preprocessed_code, error_msg = self.preprocess_code(code_str)
+        if error_msg:
+            # If there's an error in preprocessing, show it
+            self.astText.setText(
+                f"Preprocessing Error:\n{error_msg}\n\n"
+                "Attempting to parse without preprocessing..."
+            )
+            # Attempt to parse without preprocessing
+            self.parse_and_display_ast(code_str)
+        else:
+            # Parse the preprocessed code
+            self.parse_and_display_ast(preprocessed_code)
+
+    def preprocess_code(self, code_str):
+        """Preprocess the code using gcc -E. Returns (preprocessed_code, error_msg)."""
+        # We'll write the code to a temporary file, run gcc -E on it.
+        # If gcc fails, we return the original code + error message.
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".c") as tmp:
+            tmp.write(code_str.encode("utf-8", errors="ignore"))
+            tmp.flush()
+            tmp_path = tmp.name
+
+        preprocessed_code = None
+        error_msg = None
+        try:
+            result = subprocess.run(
+                ["gcc", "-E", tmp_path],
+                capture_output=True,
+                text=True,
+                check=False
+            )
+
+            if result.returncode == 0:
+                preprocessed_code = result.stdout
+            else:
+                error_msg = result.stderr
+        except FileNotFoundError:
+            # "gcc" not found
+            error_msg = "gcc not found on system. Please install GCC or parse without preprocessing."
+        except Exception as e:
+            error_msg = str(e)
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+        return (preprocessed_code, error_msg)
+
+    def parse_and_display_ast(self, code):
+        """Use pycparser to parse code and display the AST."""
         parser = CParser()
         try:
-            ast = parser.parse(self.c_code)
-            self.astText.setText(self.get_ast_text(ast))
+            ast = parser.parse(code)
+            ast_str = self.get_ast_text(ast)
+            self.astText.setText(ast_str if ast_str else "<Empty AST>")
         except Exception as e:
-            self.astText.setText(f"Error parsing C code: {e}")
-    
+            self.astText.setText(f"Error parsing C code:\n{e}")
+
     def get_ast_text(self, node, level=0):
-        """Recursively format AST nodes into readable text."""
+        """Recursively format AST nodes into a readable text tree."""
         result = ""
         if isinstance(node, c_ast.Node):
             result += "  " * level + node.__class__.__name__ + "\n"
             for child_name, child in node.children():
                 result += self.get_ast_text(child, level + 1)
         return result
-    
+
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     viewer = ASTViewer()
