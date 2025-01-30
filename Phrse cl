@@ -1,0 +1,189 @@
+import sys
+import os
+import tempfile
+
+# 1) Install clang Python bindings: pip install clang (or pip install libclang)
+import clang.cindex
+
+# 2) IMPORTANT: Explicitly set your libclang.dll path here
+clang.cindex.Config.set_library_file(
+    r"C:\app\Python311\Lib\site-packages\clang\native\libclang.dll"
+)
+
+# 3) PyQt imports
+from PyQt5.QtWidgets import (
+    QApplication,
+    QWidget,
+    QVBoxLayout,
+    QPushButton,
+    QTextEdit,
+    QFileDialog,
+    QLabel,
+    QMessageBox
+)
+
+
+class ClangASTViewer(QWidget):
+    """
+    A PyQt5 application that:
+      - Lets you paste or load any C code.
+      - Uses Clang (libclang) to parse it (with built-in preprocessing).
+      - Displays the resulting AST tree in a text box.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self.initUI()
+
+    def initUI(self):
+        self.setWindowTitle("Clang-based C AST Generator")
+        self.setGeometry(100, 100, 900, 700)
+
+        layout = QVBoxLayout()
+
+        # Intro/Help text
+        instructions_text = """<b>Clang-based C AST Viewer</b><br>
+1. Paste or load your C code below.<br>
+2. Click 'Generate AST' to parse with Clang.<br>
+3. The AST tree is displayed at the bottom.<br><br>
+<b>No errors should appear if:</b><br>
+- Your code is valid C (with matching braces, etc.).<br>
+- 'libclang.dll' is correctly referenced (see the path in the script).<br>
+- Any special headers are included via additional -I flags (if needed).
+"""
+        self.instructions = QLabel(instructions_text)
+        layout.addWidget(self.instructions)
+
+        # Buttons: Load file & Generate AST
+        self.loadBtn = QPushButton("Load C File")
+        self.loadBtn.clicked.connect(self.load_c_file)
+        layout.addWidget(self.loadBtn)
+
+        self.parseBtn = QPushButton("Generate AST")
+        self.parseBtn.clicked.connect(self.parse_code)
+        layout.addWidget(self.parseBtn)
+
+        # Code input area
+        self.codeLabel = QLabel("Paste or Edit C Code Below:")
+        layout.addWidget(self.codeLabel)
+
+        self.codeEdit = QTextEdit()
+        layout.addWidget(self.codeEdit)
+
+        # AST output area
+        self.astLabel = QLabel("Clang AST Output:")
+        layout.addWidget(self.astLabel)
+
+        self.astOutput = QTextEdit()
+        self.astOutput.setReadOnly(True)
+        layout.addWidget(self.astOutput)
+
+        self.setLayout(layout)
+
+    def load_c_file(self):
+        """
+        Opens a file chooser to load a .c file
+        into the text area.
+        """
+        options = QFileDialog.Options()
+        filePath, _ = QFileDialog.getOpenFileName(
+            self,
+            "Open C File",
+            "",
+            "C Files (*.c);;All Files (*)",
+            options=options
+        )
+        if filePath:
+            try:
+                with open(filePath, "r", encoding="utf-8", errors="ignore") as f:
+                    code = f.read()
+                self.codeEdit.setText(code)
+                self.astOutput.setText("File loaded successfully. Click 'Generate AST'.")
+            except Exception as e:
+                QMessageBox.critical(self, "Error", f"Failed to load file:\n{e}")
+
+    def parse_code(self):
+        """
+        Parse the C code (pasted or loaded) using libclang,
+        then display its AST.
+        """
+        code_str = self.codeEdit.toPlainText()
+        if not code_str.strip():
+            self.astOutput.setText("No C code provided.")
+            return
+
+        # Write code to a temp file for Clang to parse
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".c") as tmp:
+            tmp.write(code_str.encode("utf-8", errors="ignore"))
+            tmp.flush()
+            tmp_path = tmp.name
+
+        try:
+            # Create a Clang index & parse the file.
+            # -std=gnu11 allows Gnu C extensions; adjust as needed.
+            # If you have special includes, do e.g. ["-I", "path/to/includes"].
+            index = clang.cindex.Index.create()
+            tu = index.parse(tmp_path, args=["-std=gnu11", "-ferror-limit=0"])
+
+            if not tu or not tu.cursor:
+                self.astOutput.setText("Clang failed to parse the code (no translation unit).")
+                return
+
+            # If Clang encountered errors/warnings, display them:
+            diagnostics = tu.diagnostics
+            errors = []
+            for diag in diagnostics:
+                # severity = 0(Ignored),1(Note),2(Warning),3(Error),4(Fatal)
+                if diag.severity >= clang.cindex.Diagnostic.Error:
+                    errors.append(f"{diag.spelling} (Line {diag.location.line})")
+
+            # If there are errors, show them first:
+            if errors:
+                err_msg = "Clang reported errors:\n"
+                err_msg += "\n".join(f"  - {e}" for e in errors)
+                err_msg += "\n\nAST may be partial:\n"
+                self.astOutput.setText(err_msg)
+            else:
+                self.astOutput.setText("")  # Clear previous text
+
+            # Recursively build AST text
+            ast_str = self.build_ast_text(tu.cursor)
+            self.astOutput.append(ast_str)
+
+        except Exception as e:
+            self.astOutput.setText(f"Error parsing code with clang:\n{e}")
+
+        finally:
+            try:
+                os.remove(tmp_path)
+            except OSError:
+                pass
+
+    def build_ast_text(self, node, depth=0):
+        """
+        Recursively traverse Clang AST and
+        format as a text tree.
+        """
+        indent = '  ' * depth
+        # Node kind & its name (spelling)
+        node_info = f"{indent}- {node.kind} | {node.spelling or ''}"
+
+        # File/line info if available
+        if node.location.file and node.location.file.name:
+            node_info += f" (File: {node.location.file.name}, Line: {node.location.line})"
+
+        result = node_info + "\n"
+
+        for child in node.get_children():
+            result += self.build_ast_text(child, depth + 1)
+
+        return result
+
+def main():
+    app = QApplication(sys.argv)
+    viewer = ClangASTViewer()
+    viewer.show()
+    sys.exit(app.exec_())
+
+if __name__ == '__main__':
+    main()
