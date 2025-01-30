@@ -1,0 +1,67 @@
+import sys
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QTextEdit, QFileDialog, QLabel
+from pycparser import CParser, c_ast
+
+class ASTViewer(QWidget):
+    def __init__(self):
+        super().__init__()
+        self.initUI()
+    
+    def initUI(self):
+        self.setWindowTitle("C AST Generator")
+        self.setGeometry(100, 100, 800, 600)
+        
+        layout = QVBoxLayout()
+        
+        self.loadButton = QPushButton("Load C File")
+        self.loadButton.clicked.connect(self.loadFile)
+        layout.addWidget(self.loadButton)
+        
+        self.extractButton = QPushButton("Extract AST")
+        self.extractButton.clicked.connect(self.extractAST)
+        layout.addWidget(self.extractButton)
+        
+        self.resultLabel = QLabel("Abstract Syntax Tree:")
+        layout.addWidget(self.resultLabel)
+        
+        self.astText = QTextEdit()
+        self.astText.setReadOnly(True)
+        layout.addWidget(self.astText)
+        
+        self.setLayout(layout)
+        
+    def loadFile(self):
+        options = QFileDialog.Options()
+        filePath, _ = QFileDialog.getOpenFileName(self, "Open C File", "", "C Files (*.c);;All Files (*)", options=options)
+        
+        if filePath:
+            with open(filePath, "r") as file:
+                self.c_code = file.read()
+            self.astText.setText("C Code Loaded. Click 'Extract AST' to generate AST.")
+        
+    def extractAST(self):
+        if not hasattr(self, 'c_code') or not self.c_code.strip():
+            self.astText.setText("No C code loaded. Please load a C file first.")
+            return
+        
+        parser = CParser()
+        try:
+            ast = parser.parse(self.c_code)
+            self.astText.setText(self.get_ast_text(ast))
+        except Exception as e:
+            self.astText.setText(f"Error parsing C code: {e}")
+    
+    def get_ast_text(self, node, level=0):
+        """Recursively format AST nodes into readable text."""
+        result = """
+        if isinstance(node, c_ast.Node):
+            result += "  " * level + node.__class__.__name__ + "\n"
+            for child_name, child in node.children():
+                result += self.get_ast_text(child, level + 1)
+        return result
+    
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    viewer = ASTViewer()
+    viewer.show()
+    sys.exit(app.exec_())
