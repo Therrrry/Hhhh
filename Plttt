@@ -1,0 +1,140 @@
+import sys
+import os
+import re
+from PyQt5.QtWidgets import (
+    QApplication, QWidget, QVBoxLayout, QPushButton, QFileDialog, QTextEdit, QLabel
+)
+from PyQt5.QtGui import QPixmap
+from PyQt5.QtCore import Qt
+
+class ASTtoUMLConverter(QWidget):
+    def __init__(self, plantuml_jar_path=None):
+        super().__init__()
+
+        self.plantuml_jar_path = plantuml_jar_path  # Path to PlantUML JAR (optional)
+
+        # UI Elements
+        self.init_ui()
+
+    def init_ui(self):
+        layout = QVBoxLayout()
+
+        self.label = QLabel("Select a Clang AST File (.txt):")
+        layout.addWidget(self.label)
+
+        self.btn_select = QPushButton("Browse AST File")
+        self.btn_select.clicked.connect(self.select_file)
+        layout.addWidget(self.btn_select)
+
+        self.text_output = QTextEdit()
+        self.text_output.setReadOnly(True)
+        layout.addWidget(self.text_output)
+
+        self.btn_convert = QPushButton("Convert to UML")
+        self.btn_convert.clicked.connect(self.convert_to_uml)
+        layout.addWidget(self.btn_convert)
+
+        self.btn_preview = QPushButton("Preview UML (if PlantUML JAR is set)")
+        self.btn_preview.clicked.connect(self.preview_uml)
+        layout.addWidget(self.btn_preview)
+
+        self.uml_image = QLabel()
+        self.uml_image.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self.uml_image)
+
+        self.setLayout(layout)
+        self.setWindowTitle("Clang AST to UML Converter")
+        self.setGeometry(100, 100, 600, 500)
+
+    def select_file(self):
+        options = QFileDialog.Options()
+        file_path, _ = QFileDialog.getOpenFileName(self, "Select AST File", "", "Text Files (*.txt);;All Files (*)", options=options)
+
+        if file_path:
+            self.ast_file_path = file_path
+            self.label.setText(f"Selected: {os.path.basename(file_path)}")
+
+    def convert_to_uml(self):
+        if not hasattr(self, 'ast_file_path'):
+            self.text_output.setText("Please select an AST file first.")
+            return
+
+        uml_file_path = self.ast_file_path.replace(".txt", ".uml")
+        self.parse_clang_ast_to_plantuml(self.ast_file_path, uml_file_path)
+
+        self.text_output.setText(f"Conversion Complete! UML File Saved: {uml_file_path}")
+        self.uml_file_path = uml_file_path
+
+    def parse_clang_ast_to_plantuml(self, ast_filename, plantuml_filename):
+        """Converts Clang AST to PlantUML sequence diagram."""
+        with open(ast_filename, "r", encoding="utf-8") as file:
+            lines = file.readlines()
+
+        plantuml_code = ["@startuml", "autonumber"]
+
+        functions = {}
+        stack = []
+
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+
+            match_func = re.search(r'FunctionDecl <[^>]+> (\w+)', line)
+            if match_func:
+                func_name = match_func.group(1)
+                stack.append(func_name)
+                if func_name not in functions:
+                    functions[func_name] = []
+                continue
+
+            match_call = re.search(r'CallExpr <[^>]+>.*', line)
+            if match_call and stack:
+                caller = stack[-1]
+                next_line_index = lines.index(line) + 1
+                if next_line_index < len(lines):
+                    callee_match = re.search(r'ImplicitCastExpr.*?\n\s+DeclRefExpr <[^>]+> (\w+)', lines[next_line_index])
+                    if callee_match:
+                        callee = callee_match.group(1)
+                        if caller not in functions:
+                            functions[caller] = []
+                        functions[caller].append(callee)
+
+            if '}' in line and stack:
+                stack.pop()
+
+        for caller, callees in functions.items():
+            for callee in callees:
+                plantuml_code.append(f"{caller} -> {callee} : calls")
+
+        plantuml_code.append("@enduml")
+
+        with open(plantuml_filename, "w", encoding="utf-8") as file:
+            file.write("\n".join(plantuml_code))
+
+    def preview_uml(self):
+        if not hasattr(self, 'uml_file_path'):
+            self.text_output.setText("No UML file found. Convert first.")
+            return
+
+        if not self.plantuml_jar_path:
+            self.text_output.setText("PlantUML JAR path not set. Please set it manually.")
+            return
+
+        output_image = self.uml_file_path.replace(".uml", ".png")
+
+        os.system(f'java -jar "{self.plantuml_jar_path}" "{self.uml_file_path}" -tpng')
+
+        if os.path.exists(output_image):
+            pixmap = QPixmap(output_image)
+            self.uml_image.setPixmap(pixmap)
+            self.text_output.setText(f"UML Preview Generated: {output_image}")
+        else:
+            self.text_output.setText("Failed to generate UML preview.")
+
+if __name__ == "__main__":
+    plantuml_jar_path = "path/to/plantuml.jar"  # Set your PlantUML JAR path here
+    app = QApplication(sys.argv)
+    converter = ASTtoUMLConverter(plantuml_jar_path)
+    converter.show()
+    sys.exit(app.exec_())
