@@ -2,7 +2,7 @@ import os
 import sys
 import pycparser
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QFileDialog, QLabel, QLineEdit
-from pycparser import parse_file
+from pycparser import CParser
 
 class CtoASTConverter(QWidget):
     def __init__(self):
@@ -63,9 +63,12 @@ class CtoASTConverter(QWidget):
             self.output_label.setText(f"Selected Directory: {self.output_dir}")
 
     def preprocess_code(self, filename):
-        """Preprocesses the C code using pycparser."""
+        """Preprocesses the C code using pycparser without requiring external dependencies."""
         try:
-            ast = parse_file(filename, use_cpp=True)
+            with open(filename, "r") as f:
+                code = f.read()
+            parser = CParser()
+            ast = parser.parse(code)
             return ast
         except Exception as e:
             return f"Error processing file: {str(e)}"
