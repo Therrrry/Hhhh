@@ -1,5 +1,6 @@
 import os
 import sys
+import subprocess
 import clang.cindex
 from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QFileDialog, QLabel, QLineEdit, QTextEdit
 
@@ -11,7 +12,7 @@ class CtoASTConverter(QWidget):
     def init_ui(self):
         self.setWindowTitle("C to AST Converter")
         self.setGeometry(100, 100, 600, 400)
-        
+
         layout = QVBoxLayout()
 
         # File Selection
@@ -66,11 +67,28 @@ class CtoASTConverter(QWidget):
             self.output_dir = dir_name
             self.output_label.setText(f"Selected Directory: {self.output_dir}")
 
+    def preprocess_code(self, filename):
+        """Preprocesses the C code using Clang to remove unsupported directives."""
+        try:
+            preprocessed_file = f"{filename}.i"
+            clang_path = "clang"  # Ensure clang is in PATH
+            
+            # Run clang preprocessing
+            subprocess.run([clang_path, "-E", filename, "-o", preprocessed_file], check=True)
+
+            with open(preprocessed_file, "r") as f:
+                processed_code = f.read()
+
+            return processed_code
+        except Exception as e:
+            return f"Error preprocessing file: {str(e)}"
+
     def parse_ast(self, filename):
         """Parses the C code using clang and generates an AST."""
         try:
             index = clang.cindex.Index.create()
             translation_unit = index.parse(filename, args=['-std=c99', '-Wall'])
+
             if not translation_unit:
                 return "Error: Unable to parse the file."
 
@@ -98,7 +116,20 @@ class CtoASTConverter(QWidget):
             self.status_label.setText("Please enter a valid output file name.")
             return
 
-        ast_output = self.parse_ast(self.c_file)
+        # Preprocess the file to expand macros
+        preprocessed_code = self.preprocess_code(self.c_file)
+        
+        if preprocessed_code.startswith("Error"):
+            self.status_label.setText(preprocessed_code)
+            return
+        
+        # Save the preprocessed code to a temporary file
+        preprocessed_file = os.path.join(self.output_dir, "temp_preprocessed.c")
+        with open(preprocessed_file, "w") as f:
+            f.write(preprocessed_code)
+
+        # Parse the AST
+        ast_output = self.parse_ast(preprocessed_file)
 
         if ast_output.startswith("Error"):
             self.status_label.setText(ast_output)
@@ -112,9 +143,9 @@ class CtoASTConverter(QWidget):
         self.status_label.setText(f"AST saved at {output_path}")
 
 if __name__ == "__main__":
-    # Set Clang library path if needed (adjust this path based on your installation)
-    clang.cindex.Config.set_library_path("C:/Program Files/LLVM/bin")  # Adjust if required
-    
+    # Set Clang library path if required (adjust this path based on your installation)
+    clang.cindex.Config.set_library_path("C:/Program Files/LLVM/bin")  # Adjust if needed
+
     app = QApplication(sys.argv)
     window = CtoASTConverter()
     window.show()
