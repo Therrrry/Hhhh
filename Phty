@@ -1,131 +1,99 @@
-import sys
 import os
-import clang.cindex
-import graphviz
-import tkinter as tk
-from tkinter import filedialog, messagebox
+import sys
+import pycparser
+from PyQt5.QtWidgets import QApplication, QWidget, QVBoxLayout, QPushButton, QFileDialog, QLabel, QLineEdit
+from pycparser import parse_file
 
-# Initialize Clang
-clang.cindex.Config.set_library_path("/path/to/libclang")  # Change accordingly
-
-class CToSequenceDiagram:
-    def __init__(self, file_path, ast_save_path, uml_save_path):
-        self.file_path = file_path
-        self.ast_file = os.path.join(ast_save_path, "ast_output.txt")
-        self.uml_file = os.path.join(uml_save_path, "uml_output.puml")
-        self.seq_diagram_file = "sequence_diagram"
-
-    def preprocess_code(self):
-        """Preprocess C code, handle includes and macros."""
-        try:
-            preprocessed_code = os.popen(f"gcc -E {self.file_path}").read()
-            with open("preprocessed.c", "w") as f:
-                f.write(preprocessed_code)
-            return "preprocessed.c"
-        except Exception as e:
-            print("Error in preprocessing:", e)
-            return None
-
-    def generate_ast(self):
-        """Generate AST from the preprocessed C code."""
-        index = clang.cindex.Index.create()
-        try:
-            translation_unit = index.parse(self.file_path, args=['-x', 'c'])
-            with open(self.ast_file, "w") as f:
-                for node in translation_unit.cursor.walk_preorder():
-                    f.write(f"{node.kind} - {node.spelling}\n")
-        except Exception as e:
-            print("Error in AST Generation:", e)
-            return None
-
-    def prompt_uml_upload(self):
-        """Ask user to upload UML file for sequence diagram generation."""
-        messagebox.showinfo("Upload Required", "Please upload the generated UML file for Graphviz processing.")
-
-    def generate_sequence_diagram(self, uploaded_uml_file):
-        """Generate a sequence diagram from the uploaded UML."""
-        try:
-            dot = graphviz.Digraph(comment='Sequence Diagram')
-            with open(uploaded_uml_file, "r") as f:
-                for line in f:
-                    elements = line.strip().split()
-                    if len(elements) > 1:
-                        dot.edge(elements[0], elements[-1])
-            dot.render(self.seq_diagram_file, format='png', cleanup=False)
-        except Exception as e:
-            print("Error in Sequence Diagram Generation:", e)
-            return None
-
-    def run_pipeline(self):
-        """Execute the full pipeline."""
-        preprocessed_file = self.preprocess_code()
-        if preprocessed_file:
-            self.generate_ast()
-            print(f"AST File Saved at: {self.ast_file}")
-            messagebox.showinfo("AST Generated", f"AST saved at {self.ast_file}. Please convert it to UML using PlantUML.")
-            self.prompt_uml_upload()
-
-class GUI:
+class CtoASTConverter(QWidget):
     def __init__(self):
-        self.root = tk.Tk()
-        self.root.title("C to Sequence Diagram")
-        self.create_widgets()
+        super().__init__()
+        self.init_ui()
 
-    def create_widgets(self):
-        """Create UI elements."""
-        self.label = tk.Label(self.root, text="Select a C File")
-        self.label.pack()
-        self.button = tk.Button(self.root, text="Browse", command=self.load_file)
-        self.button.pack()
-        self.ast_path_label = tk.Label(self.root, text="Select AST Save Location")
-        self.ast_path_label.pack()
-        self.ast_button = tk.Button(self.root, text="Browse", command=self.set_ast_path)
-        self.ast_button.pack()
-        self.uml_path_label = tk.Label(self.root, text="Select UML Save Location")
-        self.uml_path_label.pack()
-        self.uml_button = tk.Button(self.root, text="Browse", command=self.set_uml_path)
-        self.uml_button.pack()
-        self.run_button = tk.Button(self.root, text="Generate AST", command=self.run_conversion)
-        self.run_button.pack()
-        self.upload_button = tk.Button(self.root, text="Upload UML File", command=self.upload_uml)
-        self.upload_button.pack()
+    def init_ui(self):
+        self.setWindowTitle("C to AST Converter")
+        self.setGeometry(100, 100, 500, 250)
+        
+        layout = QVBoxLayout()
 
-    def load_file(self):
-        """Load a C file."""
-        self.file_path = filedialog.askopenfilename(filetypes=[("C Files", "*.c;*.h")])
-        if self.file_path:
-            messagebox.showinfo("File Selected", f"Selected: {self.file_path}")
+        # File Selection
+        self.file_label = QLabel("Select C File:")
+        layout.addWidget(self.file_label)
+        self.file_button = QPushButton("Choose File")
+        self.file_button.clicked.connect(self.select_file)
+        layout.addWidget(self.file_button)
 
-    def set_ast_path(self):
-        """Set AST save location."""
-        self.ast_save_path = filedialog.askdirectory()
-        messagebox.showinfo("AST Save Path", f"AST will be saved at: {self.ast_save_path}")
+        # Output Directory Selection
+        self.output_label = QLabel("Select Output Directory:")
+        layout.addWidget(self.output_label)
+        self.output_button = QPushButton("Choose Directory")
+        self.output_button.clicked.connect(self.select_output_dir)
+        layout.addWidget(self.output_button)
 
-    def set_uml_path(self):
-        """Set UML save location."""
-        self.uml_save_path = filedialog.askdirectory()
-        messagebox.showinfo("UML Save Path", f"UML will be saved at: {self.uml_save_path}")
+        # Output File Name
+        self.output_filename_label = QLabel("Enter Output File Name:")
+        layout.addWidget(self.output_filename_label)
+        self.output_filename_input = QLineEdit()
+        layout.addWidget(self.output_filename_input)
 
-    def run_conversion(self):
-        """Run the conversion process."""
-        if hasattr(self, 'file_path') and hasattr(self, 'ast_save_path') and hasattr(self, 'uml_save_path'):
-            processor = CToSequenceDiagram(self.file_path, self.ast_save_path, self.uml_save_path)
-            processor.run_pipeline()
-        else:
-            messagebox.showerror("Error", "Please select all required paths and a C file.")
+        # Convert Button
+        self.convert_button = QPushButton("Convert to AST")
+        self.convert_button.clicked.connect(self.convert_to_ast)
+        layout.addWidget(self.convert_button)
 
-    def upload_uml(self):
-        """Upload UML file for sequence diagram processing."""
-        uploaded_uml = filedialog.askopenfilename(filetypes=[("PlantUML Files", "*.puml")])
-        if uploaded_uml:
-            processor = CToSequenceDiagram(self.file_path, self.ast_save_path, self.uml_save_path)
-            processor.generate_sequence_diagram(uploaded_uml)
-            messagebox.showinfo("Success", "Sequence Diagram Generated")
-        else:
-            messagebox.showerror("Error", "No UML file selected")
+        # Status Label
+        self.status_label = QLabel("Select a C file, output directory, and specify a file name.")
+        layout.addWidget(self.status_label)
 
-    def run(self):
-        self.root.mainloop()
+        self.setLayout(layout)
+        self.c_file = ""
+        self.output_dir = ""
+
+    def select_file(self):
+        options = QFileDialog.Options()
+        file_name, _ = QFileDialog.getOpenFileName(self, "Select C File", "", "C Files (*.c);;All Files (*)", options=options)
+        if file_name:
+            self.c_file = file_name
+            self.file_label.setText(f"Selected File: {self.c_file}")
+
+    def select_output_dir(self):
+        options = QFileDialog.Options()
+        dir_name = QFileDialog.getExistingDirectory(self, "Select Output Directory", "", options=options)
+        if dir_name:
+            self.output_dir = dir_name
+            self.output_label.setText(f"Selected Directory: {self.output_dir}")
+
+    def preprocess_code(self, filename):
+        """Preprocesses the C code using pycparser."""
+        try:
+            ast = parse_file(filename, use_cpp=True)
+            return ast
+        except Exception as e:
+            return f"Error processing file: {str(e)}"
+
+    def convert_to_ast(self):
+        if not self.c_file or not self.output_dir:
+            self.status_label.setText("Please select a valid C file and output directory.")
+            return
+
+        output_filename = self.output_filename_input.text().strip()
+        if not output_filename:
+            self.status_label.setText("Please enter a valid output file name.")
+            return
+
+        ast_output = self.preprocess_code(self.c_file)
+
+        if isinstance(ast_output, str) and ast_output.startswith("Error"):
+            self.status_label.setText(ast_output)
+            return
+
+        output_path = os.path.join(self.output_dir, f"{output_filename}.txt")
+        with open(output_path, "w") as f:
+            f.write(str(ast_output))
+
+        self.status_label.setText(f"AST saved at {output_path}")
 
 if __name__ == "__main__":
-    GUI().run()
+    app = QApplication(sys.argv)
+    window = CtoASTConverter()
+    window.show()
+    sys.exit(app.exec_())
