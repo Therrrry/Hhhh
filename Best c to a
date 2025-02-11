@@ -3,20 +3,6 @@ from tkinter import filedialog, messagebox, scrolledtext
 import io
 import os
 import tempfile
-
-# Import pycparser modules
-from pycparser import parse_file, c_ast, plyparser
-import pycparser
-
-class ASTConverterGUI:
-    def __init__(self, root):
-        self.root = root
-        self.root.title("C Code to AST Converter")
-import tkinter as tk
-from tkinter import filedialog, messagebox, scrolledtext
-import io
-import os
-import tempfile
 import platform
 
 # Import pycparser modules
@@ -105,7 +91,6 @@ class ASTConverterGUI:
             messagebox.showwarning("No Code", "Please enter or load C code first.")
             return
 
-        # Preprocess and parse the code
         if USE_PCPP:
             try:
                 # Import pcpp here so that it's only required when using it.
@@ -120,10 +105,14 @@ class ASTConverterGUI:
                 fake_libc_dir = os.path.join(os.path.dirname(pycparser.__file__), 'utils', 'fake_libc_include')
                 pp.add_path(fake_libc_dir)
 
-                # pcpp can process code from a file-like object.
-                pp.parse(io.StringIO(code))
+                # Create a StringIO object for the code and assign it a name.
+                code_io = io.StringIO(code)
+                code_io.name = "input.c"  # pcpp expects the file-like object to have a 'name' attribute.
 
-                # Capture the preprocessed output
+                # Parse the code with pcpp
+                pp.parse(code_io)
+
+                # Capture the preprocessed output.
                 out_buffer = io.StringIO()
                 pp.write(out_buffer)
                 preprocessed_code = out_buffer.getvalue()
