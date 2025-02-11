@@ -1,0 +1,226 @@
+import os
+import sys
+from lxml import etree
+
+def parse_ea_xmi_large(xml_path):
+    """
+    Stream (iterparse) through the EA XMI file to extract:
+      - Classes (with attributes, operations)
+      - Activities (with actions)
+      - Sequence Interactions (lifelines, messages)
+    Returns three lists/dicts that describe these model elements.
+    """
+
+    classes = []       # Will hold dicts: { 'name': str, 'attributes': [], 'operations': [] }
+    activities = []    # Will hold dicts: { 'name': str, 'actions': [] }
+    interactions = []  # Will hold dicts: { 'name': str, 'lifelines': [], 'messages': [] }
+
+    # We’ll keep a small “state” as we walk through the file.
+    current_class = None
+    current_activity = None
+    current_interaction = None
+
+    # Because we only want to gather data at the end of each element,
+    # we’ll rely on the ("start", "end") events.
+
+    # Namespaces can vary in EA XMI. You might need to handle them if they appear.
+    # For example, if you see tags like <packagedElement xmi:type="uml:Class" ...>
+    # you might do: nsmap = {'xmi': 'http://www.omg.org/spec/XMI/20131001', 'uml': 'http://www.eclipse.org/uml2/5.0.0/UML'}
+    # and then parse accordingly.
+    # Here, we’ll keep it simple, reading attributes directly.
+
+    context = etree.iterparse(xml_path, events=("start", "end"), huge_tree=True)
+
+    for event, elem in context:
+        tag_name = etree.QName(elem).localname  # get tag without namespace, e.g. "packagedElement"
+
+        # ---- Detect UML Class ----
+        if event == "start" and tag_name == "packagedElement":
+            # Example: <packagedElement xmi:type="uml:Class" name="Person" ...>
+            xmi_type = elem.get("{http://www.omg.org/spec/XMI/20131001}type")  # e.g. "uml:Class"
+            if xmi_type == "uml:Class":
+                current_class = {
+                    "name": elem.get("name", "UnnamedClass"),
+                    "attributes": [],
+                    "operations": []
+                }
+
+        elif event == "end" and tag_name == "packagedElement" and current_class is not None:
+            # We’ve reached the end of this <packagedElement> for the class
+            classes.append(current_class)
+            current_class = None
+            elem.clear()  # Free memory from this element
+
+        # ---- Detect UML Attributes (ownedAttribute) inside a Class ----
+        elif current_class is not None and event == "start" and tag_name == "ownedAttribute":
+            attr_name = elem.get("name", "UnnamedAttribute")
+            attr_type = elem.get("type", "UnknownType")
+            current_class["attributes"].append((attr_name, attr_type))
+
+        # ---- Detect UML Operations (ownedOperation) inside a Class ----
+        elif current_class is not None and event == "start" and tag_name == "ownedOperation":
+            op_name = elem.get("name", "UnnamedOperation")
+            # We'll guess a return type; in real XMI, you might check <ownedParameter direction="return" ...>
+            return_type = "void"
+            current_class["operations"].append((op_name, return_type))
+
+        # ---- Detect UML Activity ----
+        elif event == "start" and tag_name == "packagedElement":
+            xmi_type = elem.get("{http://www.omg.org/spec/XMI/20131001}type")
+            if xmi_type == "uml:Activity":
+                current_activity = {
+                    "name": elem.get("name", "UnnamedActivity"),
+                    "actions": []
+                }
+
+        elif event == "end" and tag_name == "packagedElement" and current_activity is not None:
+            # End of this <packagedElement> for the activity
+            activities.append(current_activity)
+            current_activity = None
+            elem.clear()
+
+        # ---- Detect UML Actions (node) inside an Activity ----
+        elif current_activity is not None and event == "start" and tag_name == "node":
+            # e.g. <node xmi:type="uml:CallBehaviorAction" name="DoSomething"/>
+            node_type = elem.get("{http://www.omg.org/spec/XMI/20131001}type")
+            if node_type and "Action" in node_type:  # rough check for any *Action
+                action_name = elem.get("name", "UnnamedAction")
+                current_activity["actions"].append(action_name)
+
+        # ---- Detect UML Interaction (for sequence diagram) ----
+        elif event == "start" and tag_name == "packagedElement":
+            xmi_type = elem.get("{http://www.omg.org/spec/XMI/20131001}type")
+            if xmi_type == "uml:Interaction":
+                current_interaction = {
+                    "name": elem.get("name", "UnnamedInteraction"),
+                    "lifelines": [],
+                    "messages": []
+                }
+
+        elif event == "end" and tag_name == "packagedElement" and current_interaction is not None:
+            # End of the interaction
+            interactions.append(current_interaction)
+            current_interaction = None
+            elem.clear()
+
+        # ---- Detect Lifelines (lifeline) inside an Interaction ----
+        elif current_interaction is not None and event == "start" and tag_name == "lifeline":
+            lf_name = elem.get("name", "UnnamedLifeline")
+            current_interaction["lifelines"].append({"name": lf_name})
+
+        # ---- Detect Messages (message) inside an Interaction ----
+        elif current_interaction is not None and event == "start" and tag_name == "message":
+            msg_name = elem.get("name", "UnnamedMessage")
+            send_event = elem.get("sendEvent", "")
+            recv_event = elem.get("receiveEvent", "")
+            current_interaction["messages"].append((send_event, recv_event, msg_name))
+
+        # Once we’re done with an element (“end”), we can clear it from memory
+        if event == "end":
+            # If not a special container, just do a normal cleanup
+            elem.clear()
+
+    # End for loop
+    return classes, activities, interactions
+
+
+def generate_class_diagram_plantuml(classes):
+    """
+    Generate a PlantUML class diagram from the list of classes.
+    """
+    lines = []
+    lines.append("@startuml ClassDiagram")
+    lines.append("' Optional style: !theme blueprint")
+    
+    for cls in classes:
+        lines.append(f"class {cls['name']} {{")
+        # Attributes
+        for (attr_name, attr_type) in cls["attributes"]:
+            lines.append(f"  {attr_name}: {attr_type}")
+        # Operations
+        for (op_name, return_type) in cls["operations"]:
+            lines.append(f"  {op_name}(): {return_type}")
+        lines.append("}\n")
+    
+    lines.append("@enduml")
+    return "\n".join(lines)
+
+
+def generate_activity_diagram_plantuml(activities):
+    """
+    Generate a *single* PlantUML activity diagram containing all activities.
+    In practice, you might want one diagram per activity.
+    """
+    lines = []
+    lines.append("@startuml ActivityDiagram")
+    
+    for activity in activities:
+        lines.append(f"title Activity: {activity['name']}")
+        lines.append("start")
+        for action_name in activity["actions"]:
+            lines.append(f":{action_name};")
+        lines.append("stop\n")
+    
+    lines.append("@enduml")
+    return "\n".join(lines)
+
+
+def generate_sequence_diagram_plantuml(interactions):
+    """
+    Generate a *single* PlantUML sequence diagram from all interactions.
+    Typically, you might prefer one diagram per interaction.
+    """
+    lines = []
+    lines.append("@startuml SequenceDiagram")
+    
+    for interaction in interactions:
+        lines.append(f"title Sequence: {interaction['name']}")
+        
+        # Declare participants
+        for lf in interaction["lifelines"]:
+            lines.append(f"participant {lf['name']}")
+        
+        # Show messages
+        # Real EA XMI might store references for sendEvent/receiveEvent that
+        # link to lifeline elements. You would need to map those IDs to lifeline names.
+        # This example assumes sendEvent/recvEvent *already hold the lifeline name*, which
+        # might not be true in your file. If not, you'll need additional logic to do the mapping.
+        for (send_ev, recv_ev, msg_name) in interaction["messages"]:
+            lines.append(f"{send_ev} -> {recv_ev} : {msg_name}")
+        
+        lines.append("")
+    
+    lines.append("@enduml")
+    return "\n".join(lines)
+
+
+def main():
+    # Hardcode paths as requested:
+    xml_input = r"D:/trap/you.xml"
+    uml_output = r"D:/trap/you.uml"
+
+    if not os.path.exists(xml_input):
+        print(f"Error: {xml_input} does not exist.")
+        sys.exit(1)
+
+    print(f"Reading and parsing large XMI: {xml_input}")
+    classes, activities, interactions = parse_ea_xmi_large(xml_input)
+
+    print("Generating PlantUML diagrams...")
+    class_part = generate_class_diagram_plantuml(classes)
+    activity_part = generate_activity_diagram_plantuml(activities)
+    sequence_part = generate_sequence_diagram_plantuml(interactions)
+
+    # Combine everything into one file. 
+    # Each @startuml/@enduml block is a separate diagram in PlantUML.
+    all_uml = f"{class_part}\n\n{activity_part}\n\n{sequence_part}\n"
+
+    with open(uml_output, "w", encoding="utf-8") as f:
+        f.write(all_uml)
+
+    print(f"Done. UML written to: {uml_output}")
+    print("Render using: plantuml D:/trap/you.uml")
+
+
+if __name__ == "__main__":
+    main()
