@@ -16,7 +16,6 @@ class StructVisitor(c_ast.NodeVisitor):
         # Only consider structs that have a name
         if node.name:
             self.structs.append(node)
-        # Continue walking the AST
         self.generic_visit(node)
 
 # ------------------------------------------------------------------------------
@@ -51,7 +50,7 @@ class ASTtoUMLConverterGUI:
     def __init__(self, root):
         self.root = root
         self.root.title("AST to UML Converter")
-        self.ast_obj = None    # Will hold the loaded AST object
+        self.ast_obj = None    # Will hold the loaded AST object (e.g., from a pickle file)
         self.uml_code = ""     # Will hold the generated UML code
         self.create_widgets()
 
@@ -62,6 +61,12 @@ class ASTtoUMLConverterGUI:
 
         open_ast_btn = tk.Button(btn_frame, text="Open AST File", command=self.open_ast_file)
         open_ast_btn.pack(side=tk.LEFT, padx=5)
+
+        paste_ast_btn = tk.Button(btn_frame, text="Paste AST", command=self.paste_ast)
+        paste_ast_btn.pack(side=tk.LEFT, padx=5)
+
+        copy_ast_btn = tk.Button(btn_frame, text="Copy AST", command=self.copy_ast)
+        copy_ast_btn.pack(side=tk.LEFT, padx=5)
 
         convert_btn = tk.Button(btn_frame, text="Convert to UML", command=self.convert_to_uml)
         convert_btn.pack(side=tk.LEFT, padx=5)
@@ -75,7 +80,7 @@ class ASTtoUMLConverterGUI:
         # Two ScrolledText widgets: one for AST info and one for UML output.
         self.ast_text = scrolledtext.ScrolledText(self.root, wrap=tk.NONE, height=15)
         self.ast_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        self.ast_text.insert(tk.END, "AST information will be shown here after loading a file...\n")
+        self.ast_text.insert(tk.END, "AST information will be shown here after loading a file or pasting text...\n")
 
         self.uml_text = scrolledtext.ScrolledText(self.root, wrap=tk.NONE, height=15)
         self.uml_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -96,6 +101,25 @@ class ASTtoUMLConverterGUI:
                 self.ast_text.insert(tk.END, f"AST type: {type(self.ast_obj)}\n")
             except Exception as e:
                 messagebox.showerror("Error", f"Failed to load AST file:\n{e}")
+
+    def paste_ast(self):
+        """Paste text from the clipboard into the AST text widget."""
+        try:
+            clipboard_text = self.root.clipboard_get()
+            # Append the clipboard text to the AST text widget.
+            self.ast_text.insert(tk.END, clipboard_text)
+        except Exception as e:
+            messagebox.showerror("Paste Error", f"Could not paste text from clipboard:\n{e}")
+
+    def copy_ast(self):
+        """Copy the contents of the AST text widget to the clipboard."""
+        try:
+            ast_text_content = self.ast_text.get("1.0", tk.END)
+            self.root.clipboard_clear()
+            self.root.clipboard_append(ast_text_content)
+            messagebox.showinfo("Copied", "AST text copied to clipboard.")
+        except Exception as e:
+            messagebox.showerror("Copy Error", f"Could not copy AST text:\n{e}")
 
     def convert_to_uml(self):
         """Convert the loaded AST object to UML (PlantUML syntax) and display it."""
