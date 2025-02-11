@@ -1,0 +1,117 @@
+import os
+import sys
+from lxml import etree
+
+def parse_ea_xmi_sequence(xml_path):
+    """
+    Stream through the EA XMI file to extract only sequence diagram elements:
+      - Interactions (uml:Interaction)
+      - Lifelines (uml:Lifeline)
+      - Messages (uml:Message)
+    Returns a list of interactions, where each interaction is a dict:
+      {
+        'name': str,
+        'lifelines': [{'name': str}, ...],
+        'messages': [(sendEvent, receiveEvent, messageName), ...]
+      }
+    """
+    interactions = []
+
+    current_interaction = None
+    
+    # Use iterparse for memory efficiency
+    context = etree.iterparse(xml_path, events=("start", "end"), huge_tree=True)
+    
+    for event, elem in context:
+        # Extract the local tag name (ignore namespaces)
+        tag_name = etree.QName(elem).localname
+        
+        # Example: <packagedElement xmi:type="uml:Interaction" name="Interaction1" ...>
+        if event == "start" and tag_name == "packagedElement":
+            xmi_type = elem.get("{http://www.omg.org/spec/XMI/20131001}type")
+            if xmi_type == "uml:Interaction":
+                # Start a new interaction
+                current_interaction = {
+                    "name": elem.get("name", "UnnamedInteraction"),
+                    "lifelines": [],
+                    "messages": []
+                }
+
+        elif event == "end" and tag_name == "packagedElement" and current_interaction is not None:
+            # Finished reading this interaction
+            interactions.append(current_interaction)
+            current_interaction = None
+            elem.clear()  # free memory
+
+        # If we are inside an interaction, detect lifeline/message
+        elif current_interaction is not None and event == "start":
+            if tag_name == "lifeline":
+                lf_name = elem.get("name", "UnnamedLifeline")
+                current_interaction["lifelines"].append({"name": lf_name})
+
+            elif tag_name == "message":
+                msg_name = elem.get("name", "UnnamedMessage")
+                send_event = elem.get("sendEvent", "")
+                recv_event = elem.get("receiveEvent", "")
+                current_interaction["messages"].append((send_event, recv_event, msg_name))
+        
+        # Clear element on end to free memory
+        if event == "end":
+            elem.clear()
+
+    return interactions
+
+
+def generate_sequence_diagram_plantuml(interactions):
+    """
+    Create a single PlantUML sequence diagram from all found interactions.
+    Each interaction is appended one after another.
+    If you prefer one diagram per interaction, you can generate multiple
+    @startuml/@enduml blocks instead.
+    """
+    lines = []
+    lines.append("@startuml SequenceDiagram")
+    
+    for interaction in interactions:
+        lines.append(f"title Sequence: {interaction['name']}")
+        
+        # Declare participants (lifelines)
+        for lf in interaction["lifelines"]:
+            lines.append(f"participant {lf['name']}")
+
+        # List messages
+        # NOTE: In real EA XMI, sendEvent/receiveEvent are often IDs referencing lifeline elements.
+        # For a real solution, map those IDs to lifeline names. This code assumes they are already names.
+        for (send_ev, recv_ev, msg_name) in interaction["messages"]:
+            lines.append(f"{send_ev} -> {recv_ev} : {msg_name}")
+        
+        lines.append("")  # blank line between interactions
+    
+    lines.append("@enduml")
+    return "\n".join(lines)
+
+
+def main():
+    # Hard-coded file paths as requested
+    xml_input = r"D:/trap/you.xml"
+    uml_output = r"D:/trap/you.uml"
+
+    if not os.path.exists(xml_input):
+        print(f"Error: {xml_input} does not exist.")
+        sys.exit(1)
+
+    print(f"Reading large XMI file for sequence diagrams: {xml_input}")
+    interactions = parse_ea_xmi_sequence(xml_input)
+
+    print("Generating PlantUML (sequence diagram only).")
+    sequence_diagram = generate_sequence_diagram_plantuml(interactions)
+
+    with open(uml_output, "w", encoding="utf-8") as f:
+        f.write(sequence_diagram)
+
+    print(f"Done. UML (sequence diagram) written to: {uml_output}")
+    print("To render, run: plantuml D:/trap/you.uml")
+
+
+if __name__ == "__main__":
+    main()
