@@ -10,14 +10,30 @@ from pycparser import parse_file, c_ast, plyparser
 import pycparser
 
 # ------------------------------------------------------------------------------
-# Set this flag to True to use pcpp (a pure-Python C preprocessor).
-# This is recommended for Windows users who do not have a system C preprocessor.
+# Configuration flags:
+# - USE_PCPP: When True, use the pure-Python preprocessor (pcpp)
+#   (Recommended for Windows if you don’t have a system C preprocessor.)
+# - CPP_PATH: Only used if USE_PCPP is False.
 # ------------------------------------------------------------------------------
 USE_PCPP = True
+CPP_PATH = 'cpp'  # Not used when USE_PCPP is True
 
-# If you wish to use a system preprocessor (e.g., on Linux/Mac),
-# set USE_PCPP = False and ensure that CPP_PATH points to a valid executable.
-CPP_PATH = 'cpp'  # not used when USE_PCPP is True
+if USE_PCPP:
+    try:
+        from pcpp import Preprocessor
+    except ImportError:
+        Preprocessor = None
+        raise ImportError("pcpp module not found. Please install it using: pip install pcpp")
+
+    # Subclass the Preprocessor to override missing-include handling.
+    class MyPreprocessor(Preprocessor):
+        def on_include_not_found(self, include_token, is_system_include):
+            # Instead of throwing an error when an include file is not found,
+            # simply return an empty string.
+            # (Optionally, you could log a warning here.)
+            return ''
+else:
+    MyPreprocessor = None  # Not used in this branch
 
 class ASTConverterGUI:
     def __init__(self, root):
@@ -93,25 +109,28 @@ class ASTConverterGUI:
 
         if USE_PCPP:
             try:
-                # Import pcpp here so that it's only required when using it.
-                from pcpp import Preprocessor
-            except ImportError:
-                messagebox.showerror("Import Error", "Please install 'pcpp' via pip (pip install pcpp)")
-                return
+                # Use our custom preprocessor to ignore missing includes.
+                pp = MyPreprocessor()
+                # Use an absolute path for the fake libc include directory.
+                fake_libc_dir = os.path.abspath(os.path.join(
+                    os.path.dirname(pycparser.__file__),
+                    'utils',
+                    'fake_libc_include'
+                ))
+                if not os.path.isdir(fake_libc_dir):
+                    messagebox.showerror("Preprocessing Error",
+                                         f"Fake libc include directory not found:\n{fake_libc_dir}")
+                    return
 
-            try:
-                # Set up the preprocessor and add the fake libc include directory.
-                pp = Preprocessor()
-                fake_libc_dir = os.path.join(os.path.dirname(pycparser.__file__), 'utils', 'fake_libc_include')
                 pp.add_path(fake_libc_dir)
 
-                # Define 'CheckSum' to itself to avoid unwanted macro expansion.
-                # Use a single argument in the form "MACRO=value".
-                pp.define("CheckSum=CheckSum")
+                # Optionally, if you need to define a macro, adjust the definition here.
+                # (Commented out to avoid "Bad macro Definition" errors.)
+                # pp.define("CheckSum=CheckSum")
 
                 # Create a StringIO object for the code and assign it a name.
                 code_io = io.StringIO(code)
-                code_io.name = "input.c"  # pcpp expects a file-like object with a 'name' attribute.
+                code_io.name = "input.c"  # pcpp requires a file-like object with a 'name' attribute.
 
                 # Parse the code with pcpp.
                 pp.parse(code_io)
@@ -123,20 +142,20 @@ class ASTConverterGUI:
 
                 # (Optional) Uncomment the next line to inspect the preprocessed code:
                 # print("Preprocessed code:\n", preprocessed_code)
-                
+
             except Exception as e:
                 messagebox.showerror("Preprocessing Error", f"Error during preprocessing with pcpp:\n{e}")
                 return
 
             try:
-                # Now parse the preprocessed code using pycparser's CParser.
+                # Now parse the preprocessed code using pycparser's C parser.
                 from pycparser import c_parser
                 parser = c_parser.CParser()
                 ast = parser.parse(preprocessed_code)
             except Exception as e:
                 messagebox.showerror("Parsing Error",
                                      f"Error during parsing preprocessed code:\n{e}\n"
-                                     "Please check your code or the preprocessed output for issues.")
+                                     "Please check your source or the preprocessed output for issues.")
                 return
 
         else:
@@ -150,7 +169,11 @@ class ASTConverterGUI:
                 return
 
             try:
-                fake_libc_dir = os.path.join(os.path.dirname(pycparser.__file__), 'utils', 'fake_libc_include')
+                fake_libc_dir = os.path.abspath(os.path.join(
+                    os.path.dirname(pycparser.__file__),
+                    'utils',
+                    'fake_libc_include'
+                ))
                 ast = parse_file(
                     tmp_file_name,
                     use_cpp=True,
