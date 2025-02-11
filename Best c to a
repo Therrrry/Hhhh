@@ -10,7 +10,7 @@ from pycparser import parse_file, c_ast, plyparser
 import pycparser
 
 # ------------------------------------------------------------------------------
-# Set this flag to True to use pcpp (a pure-Python preprocessor).
+# Set this flag to True to use pcpp (a pure-Python C preprocessor).
 # This is recommended for Windows users who do not have a system C preprocessor.
 # ------------------------------------------------------------------------------
 USE_PCPP = True
@@ -106,7 +106,8 @@ class ASTConverterGUI:
                 pp.add_path(fake_libc_dir)
 
                 # Define 'CheckSum' to itself to avoid unwanted macro expansion.
-                pp.define('CheckSum', 'CheckSum')
+                # Use a single argument in the form "MACRO=value".
+                pp.define("CheckSum=CheckSum")
 
                 # Create a StringIO object for the code and assign it a name.
                 code_io = io.StringIO(code)
@@ -119,8 +120,8 @@ class ASTConverterGUI:
                 out_buffer = io.StringIO()
                 pp.write(out_buffer)
                 preprocessed_code = out_buffer.getvalue()
-                
-                # (Optional) Uncomment the next line to inspect the preprocessed code in the console:
+
+                # (Optional) Uncomment the next line to inspect the preprocessed code:
                 # print("Preprocessed code:\n", preprocessed_code)
                 
             except Exception as e:
@@ -133,7 +134,6 @@ class ASTConverterGUI:
                 parser = c_parser.CParser()
                 ast = parser.parse(preprocessed_code)
             except Exception as e:
-                # If there is a parsing error, you may want to inspect the preprocessed code.
                 messagebox.showerror("Parsing Error",
                                      f"Error during parsing preprocessed code:\n{e}\n"
                                      "Please check your code or the preprocessed output for issues.")
