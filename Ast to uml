@@ -1,0 +1,148 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox, scrolledtext
+import pickle
+import os
+
+from pycparser import c_ast
+
+# ------------------------------------------------------------------------------
+# Visitor to extract named struct definitions from the AST.
+# ------------------------------------------------------------------------------
+class StructVisitor(c_ast.NodeVisitor):
+    def __init__(self):
+        self.structs = []  # Will hold all found struct nodes
+
+    def visit_Struct(self, node):
+        # Only consider structs that have a name
+        if node.name:
+            self.structs.append(node)
+        # Continue walking the AST
+        self.generic_visit(node)
+
+# ------------------------------------------------------------------------------
+# Function to generate a simple PlantUML class diagram from the list of struct nodes.
+# ------------------------------------------------------------------------------
+def generate_plantuml(structs):
+    """
+    Generate a PlantUML class diagram from a list of C struct AST nodes.
+    Each struct becomes a UML class with its fields as attributes.
+    """
+    uml_lines = ["@startuml"]
+    for s in structs:
+        uml_lines.append(f"class {s.name} {{")
+        if s.decls:  # If the struct has field declarations
+            for decl in s.decls:
+                # Extract the field name
+                field_name = decl.name if decl.name else "anon"
+                # Try to extract the field's type in simple cases
+                if hasattr(decl.type, 'type') and hasattr(decl.type.type, 'names'):
+                    field_type = " ".join(decl.type.type.names)
+                else:
+                    field_type = "unknown"
+                uml_lines.append(f"    {field_type} {field_name}")
+        uml_lines.append("}")
+    uml_lines.append("@enduml")
+    return "\n".join(uml_lines)
+
+# ------------------------------------------------------------------------------
+# Main GUI class
+# ------------------------------------------------------------------------------
+class ASTtoUMLConverterGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("AST to UML Converter")
+        self.ast_obj = None    # Will hold the loaded AST object
+        self.uml_code = ""     # Will hold the generated UML code
+        self.create_widgets()
+
+    def create_widgets(self):
+        # Frame for buttons
+        btn_frame = tk.Frame(self.root)
+        btn_frame.pack(side=tk.TOP, fill=tk.X, padx=5, pady=5)
+
+        open_ast_btn = tk.Button(btn_frame, text="Open AST File", command=self.open_ast_file)
+        open_ast_btn.pack(side=tk.LEFT, padx=5)
+
+        convert_btn = tk.Button(btn_frame, text="Convert to UML", command=self.convert_to_uml)
+        convert_btn.pack(side=tk.LEFT, padx=5)
+
+        save_btn = tk.Button(btn_frame, text="Save UML File", command=self.save_uml_file)
+        save_btn.pack(side=tk.LEFT, padx=5)
+
+        clear_btn = tk.Button(btn_frame, text="Clear", command=self.clear_text)
+        clear_btn.pack(side=tk.LEFT, padx=5)
+
+        # Two ScrolledText widgets: one for AST info and one for UML output.
+        self.ast_text = scrolledtext.ScrolledText(self.root, wrap=tk.NONE, height=15)
+        self.ast_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.ast_text.insert(tk.END, "AST information will be shown here after loading a file...\n")
+
+        self.uml_text = scrolledtext.ScrolledText(self.root, wrap=tk.NONE, height=15)
+        self.uml_text.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        self.uml_text.insert(tk.END, "UML output (PlantUML format) will be shown here after conversion...\n")
+
+    def open_ast_file(self):
+        """Open an AST file (pickle file) and load its content."""
+        file_path = filedialog.askopenfilename(
+            title="Select AST File",
+            filetypes=[("Pickle Files", "*.pkl"), ("All Files", "*.*")]
+        )
+        if file_path:
+            try:
+                with open(file_path, "rb") as f:
+                    self.ast_obj = pickle.load(f)
+                self.ast_text.delete(1.0, tk.END)
+                self.ast_text.insert(tk.END, f"AST loaded successfully from:\n{file_path}\n")
+                self.ast_text.insert(tk.END, f"AST type: {type(self.ast_obj)}\n")
+            except Exception as e:
+                messagebox.showerror("Error", f"Failed to load AST file:\n{e}")
+
+    def convert_to_uml(self):
+        """Convert the loaded AST object to UML (PlantUML syntax) and display it."""
+        if not self.ast_obj:
+            messagebox.showwarning("No AST", "Please load an AST file first.")
+            return
+
+        try:
+            visitor = StructVisitor()
+            visitor.visit(self.ast_obj)
+            uml_code = generate_plantuml(visitor.structs)
+            self.uml_code = uml_code
+            self.uml_text.delete(1.0, tk.END)
+            self.uml_text.insert(tk.END, uml_code)
+        except Exception as e:
+            messagebox.showerror("Conversion Error", f"Error converting AST to UML:\n{e}")
+
+    def save_uml_file(self):
+        """Save the generated UML code to a file."""
+        if not self.uml_code:
+            messagebox.showwarning("No UML", "No UML code available to save. Please convert first.")
+            return
+
+        file_path = filedialog.asksaveasfilename(
+            title="Save UML File",
+            defaultextension=".uml",
+            filetypes=[("UML Files", "*.uml"), ("All Files", "*.*")]
+        )
+        if file_path:
+            try:
+                with open(file_path, "w") as f:
+                    f.write(self.uml_code)
+                messagebox.showinfo("Saved", f"UML file saved to:\n{file_path}")
+            except Exception as e:
+                messagebox.showerror("Save Error", f"Error saving UML file:\n{e}")
+
+    def clear_text(self):
+        """Clear the text in both AST and UML text areas."""
+        self.ast_text.delete(1.0, tk.END)
+        self.uml_text.delete(1.0, tk.END)
+        self.ast_text.insert(tk.END, "AST information will be shown here...\n")
+        self.uml_text.insert(tk.END, "UML output will be shown here...\n")
+
+# ------------------------------------------------------------------------------
+# Main entry point
+# ------------------------------------------------------------------------------
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = ASTtoUMLConverterGUI(root)
+    root.mainloop()
