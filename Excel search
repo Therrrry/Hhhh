@@ -1,0 +1,46 @@
+import pandas as pd
+import re
+import os
+
+# --- User-defined variables ---
+file_path = r"D:\hkiu\hjk"      # Your Excel file path
+search_column = "G"             # Column where numbers/percent are to be extracted
+check_column = "D"              # Column where those values are checked
+id_column = "A"                 # Change if your unique row ID is in another column
+output_file = r"D:\hkiu\mapping_results.xlsx"  # Output file
+
+# --- Check if file exists ---
+if not os.path.isfile(file_path):
+    raise FileNotFoundError(f"File not found at {file_path}")
+
+# --- Read Excel file ---
+df = pd.read_excel(file_path)
+
+# --- Function to extract numbers or percentages ---
+def extract_numbers_and_percents(value):
+    if pd.isnull(value):
+        return []
+    matches = re.findall(r'\d+\.?\d*%?', str(value))  # Match numbers/percentages
+    return matches
+
+# --- Extract unique values from column G ---
+all_values = df[search_column].apply(extract_numbers_and_percents)
+flat_values = set(val for sublist in all_values for val in sublist)
+
+# --- Search those values in column D and map to row ID ---
+mapping_results = []
+
+for val in flat_values:
+    occurrences = df[df[check_column].astype(str).str.contains(val, regex=False, na=False)]
+    for _, row in occurrences.iterrows():
+        mapping_results.append({
+            "Value Found": val,
+            "Found In Row Identifier": row[id_column],
+            "Row Index": row.name + 2  # +2 if you want Excel row number (1 for header, 1 for zero indexing)
+        })
+
+# --- Create results dataframe and save ---
+mapping_df = pd.DataFrame(mapping_results)
+mapping_df.to_excel(output_file, index=False)
+
+print(f"Mapping completed. Results saved to: {output_file}")
