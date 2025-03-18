@@ -1,0 +1,62 @@
+import pandas as pd
+import re
+import os
+
+# === USER INPUTS ===
+file_path = r"D:\hkiu\hjk"                  # Path to input Excel file
+sheet_name = "Sheet0"                       # Sheet name in Excel
+output_file = r"D:\hkiu\final_output.xlsx"  # Desired output file
+
+# === Function to extract clean numbers from a cell ===
+def extract_numbers(cell_value):
+    if pd.isnull(cell_value):
+        return []
+    # Split by comma and strip spaces
+    return [val.strip() for val in str(cell_value).split(',') if val.strip()]
+
+# === Validation step ===
+if not os.path.exists(file_path):
+    raise FileNotFoundError(f"Input file not found at {file_path}")
+
+# === Read Excel without headers (index-based) ===
+df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
+
+# Column indexes based on user definition
+search_column_idx = 6   # This column contains comma-separated numbers
+map_column_idx = 3      # This column contains mapped values
+
+# === Build a dictionary: number -> list of mapped values ===
+mapping_dict = {}
+
+for idx, row in df.iterrows():
+    numbers_in_row = extract_numbers(row[search_column_idx])
+    map_value = str(row[map_column_idx]).strip()
+    
+    for num in numbers_in_row:
+        if num not in mapping_dict:
+            mapping_dict[num] = []
+        mapping_dict[num].append(map_value)
+
+# === Clean duplicates and sort the mapped values ===
+for num in mapping_dict:
+    unique_values = sorted(set(mapping_dict[num]))
+    mapping_dict[num] = unique_values
+
+# === Create output DataFrame ===
+output_rows = []
+for number, mapped_values in mapping_dict.items():
+    output_rows.append({
+        "Number": number,
+        "Mapped_Values": ', '.join(mapped_values)
+    })
+
+output_df = pd.DataFrame(output_rows).sort_values(by="Number", key=lambda x: x.astype(float))
+
+# === Save to Excel ===
+output_df.to_excel(output_file, index=False)
+
+# === Summary Report ===
+print(f"\n=== Mapping Completed ===")
+print(f"Total unique numbers processed: {len(output_df)}")
+print(f"Output file saved to: {output_file}")
+print(f"Columns in output: [Number, Mapped_Values]\n")
