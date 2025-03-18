@@ -2,55 +2,48 @@ import pandas as pd
 import re
 import os
 
-# --- User-defined variables ---
-file_path = r"D:\hkiu\hjk"          # Excel file location
-sheet_name = "Sheet0"               # Sheet name
-search_column = "G"                 # Column containing comma-separated numbers
-check_column = "D"                  # Column where numbers are checked
-output_file = r"D:\hkiu\updated_file.xlsx"  # Output location
+file_path = r"D:\hkiu\hjk"       
+sheet_name = "Sheet0"             
+output_file = r"D:\hkiu\updated_file.xlsx"  
 
-# --- Read Excel file ---
-if not os.path.isfile(file_path):
-    raise FileNotFoundError(f"File not found at {file_path}")
+# Read the excel without headers
+df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
 
-df = pd.read_excel(file_path, sheet_name=sheet_name)
+# Column mapping
+search_column_idx = 6  # Column G is index 6 (A=0)
+check_column_idx = 3   # Column D is index 3
 
-# --- Extract numbers from column G (comma-separated) ---
+# Extract numbers from column G
 def extract_numbers(value):
     if pd.isnull(value):
         return []
-    # split by comma and clean spaces
     return [v.strip() for v in str(value).split(',') if v.strip()]
 
 all_numbers = set()
-df['Extracted_Numbers'] = df[search_column].apply(extract_numbers)
+df['Extracted_Numbers'] = df[search_column_idx].apply(extract_numbers)
 for sublist in df['Extracted_Numbers']:
     all_numbers.update(sublist)
 
-# --- For each number, search column D and update column G of the found rows ---
-# We'll store updates in a dictionary (row index to values to append)
+# Search those numbers in column D and update column G rows
 updates = {}
-
 for number in all_numbers:
-    # Find rows in column D that contain this number
-    matches = df[df[check_column].astype(str).str.contains(rf'\b{re.escape(number)}\b', regex=True, na=False)]
+    matches = df[df[check_column_idx].astype(str).str.contains(rf'\b{re.escape(number)}\b', regex=True, na=False)]
     for idx in matches.index:
         if idx not in updates:
             updates[idx] = []
         updates[idx].append(number)
 
-# --- Append the found numbers to column G of those rows ---
+# Update column G with found values
 for idx, values in updates.items():
-    existing_val = str(df.at[idx, search_column]) if not pd.isnull(df.at[idx, search_column]) else ""
+    existing_val = str(df.at[idx, search_column_idx]) if not pd.isnull(df.at[idx, search_column_idx]) else ""
     existing_numbers = extract_numbers(existing_val)
-    # Add unique numbers
     combined = set(existing_numbers + values)
-    df.at[idx, search_column] = ', '.join(sorted(combined, key=lambda x: float(re.sub(r'%', '', x))))
+    df.at[idx, search_column_idx] = ', '.join(sorted(combined, key=lambda x: float(re.sub(r'%', '', x))))
 
-# --- Drop the helper column ---
+# Remove helper column
 df.drop(columns=['Extracted_Numbers'], inplace=True)
 
-# --- Save the updated file ---
-df.to_excel(output_file, index=False, sheet_name=sheet_name)
+# Save back with no header (if your original file has none)
+df.to_excel(output_file, index=False, header=False)
 
 print(f"Completed. Updated file saved at: {output_file}")
