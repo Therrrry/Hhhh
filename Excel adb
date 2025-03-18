@@ -2,61 +2,75 @@ import pandas as pd
 import re
 import os
 
-# === USER INPUTS ===
-file_path = r"D:\hkiu\hjk"                  # Path to input Excel file
-sheet_name = "Sheet0"                       # Sheet name in Excel
-output_file = r"D:\hkiu\final_output.xlsx"  # Desired output file
+# --- USER CONFIG ---
+file_path = r"D:\hkiu\hjk"
+sheet_name = "Sheet0"
+output_file = r"D:\hkiu\final_output.xlsx"
 
-# === Function to extract clean numbers from a cell ===
+# --- Helper function ---
 def extract_numbers(cell_value):
     if pd.isnull(cell_value):
         return []
-    # Split by comma and strip spaces
     return [val.strip() for val in str(cell_value).split(',') if val.strip()]
 
-# === Validation step ===
+# --- Validate file ---
 if not os.path.exists(file_path):
-    raise FileNotFoundError(f"Input file not found at {file_path}")
+    raise FileNotFoundError(f"File not found at: {file_path}")
 
-# === Read Excel without headers (index-based) ===
+# --- Read Excel without header ---
 df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
 
-# Column indexes based on user definition
-search_column_idx = 6   # This column contains comma-separated numbers
-map_column_idx = 3      # This column contains mapped values
+# --- Defensive check: minimum required columns ---
+required_columns = [3, 6]
+max_required_col = max(required_columns)
 
-# === Build a dictionary: number -> list of mapped values ===
+if df.shape[1] <= max_required_col:
+    raise ValueError(f"Input Excel has only {df.shape[1]} columns. "
+                     f"Expected at least {max_required_col + 1} columns (0-based index).")
+
 mapping_dict = {}
 
+# --- Process row by row ---
 for idx, row in df.iterrows():
-    numbers_in_row = extract_numbers(row[search_column_idx])
-    map_value = str(row[map_column_idx]).strip()
+    # Defensive checks: 
+    if len(row) <= max_required_col:
+        print(f"Warning: Row {idx+1} has fewer columns than expected. Skipping row.")
+        continue
+    
+    numbers_in_row = extract_numbers(row[6])  # column index 6
+    map_value = str(row[3]).strip()           # column index 3
     
     for num in numbers_in_row:
         if num not in mapping_dict:
             mapping_dict[num] = []
         mapping_dict[num].append(map_value)
 
-# === Clean duplicates and sort the mapped values ===
-for num in mapping_dict:
-    unique_values = sorted(set(mapping_dict[num]))
-    mapping_dict[num] = unique_values
+# --- Clean duplicates and sort mapped values ---
+for num, val_list in mapping_dict.items():
+    mapping_dict[num] = sorted(set(val_list))
 
-# === Create output DataFrame ===
-output_rows = []
-for number, mapped_values in mapping_dict.items():
-    output_rows.append({
+# --- Prepare final output DataFrame ---
+output_data = []
+for number, mapped_vals in mapping_dict.items():
+    output_data.append({
         "Number": number,
-        "Mapped_Values": ', '.join(mapped_values)
+        "Mapped_Values": ', '.join(mapped_vals)
     })
 
-output_df = pd.DataFrame(output_rows).sort_values(by="Number", key=lambda x: x.astype(float))
+output_df = pd.DataFrame(output_data)
 
-# === Save to Excel ===
+# Sort the output by number (if numbers are numeric)
+try:
+    output_df['Number'] = output_df['Number'].astype(float)
+    output_df = output_df.sort_values(by="Number")
+except:
+    # If not convertible to float, keep as string sorted
+    output_df = output_df.sort_values(by="Number")
+
+# --- Save output Excel ---
 output_df.to_excel(output_file, index=False)
 
-# === Summary Report ===
-print(f"\n=== Mapping Completed ===")
-print(f"Total unique numbers processed: {len(output_df)}")
-print(f"Output file saved to: {output_file}")
-print(f"Columns in output: [Number, Mapped_Values]\n")
+# --- Print Summary ---
+print(f"\n=== Process Completed ===")
+print(f"Unique numbers found: {len(output_df)}")
+print(f"Output saved at: {output_file}")
