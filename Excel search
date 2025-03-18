@@ -1,49 +1,46 @@
 import pandas as pd
 import re
-import os
 
-file_path = r"D:\hkiu\hjk"       
+# --- User inputs ---
+file_path = r"D:\hkiu\hjk"        # Your input Excel file
 sheet_name = "Sheet0"             
-output_file = r"D:\hkiu\updated_file.xlsx"  
+output_file = r"D:\hkiu\final_output.xlsx"  # Desired output file
 
-# Read the excel without headers
+# Read Excel without header row if not present, use header=None
 df = pd.read_excel(file_path, sheet_name=sheet_name, header=None)
 
-# Column mapping
-search_column_idx = 6  # Column G is index 6 (A=0)
-check_column_idx = 3   # Column D is index 3
+search_column_idx = 6  # index for column where numbers are present (0-based)
+map_column_idx = 3     # index for column to map against
 
-# Extract numbers from column G
+# Function to extract numbers from column index 6
 def extract_numbers(value):
     if pd.isnull(value):
         return []
     return [v.strip() for v in str(value).split(',') if v.strip()]
 
-all_numbers = set()
-df['Extracted_Numbers'] = df[search_column_idx].apply(extract_numbers)
-for sublist in df['Extracted_Numbers']:
-    all_numbers.update(sublist)
+# Create a mapping dictionary
+mapping = {}
 
-# Search those numbers in column D and update column G rows
-updates = {}
-for number in all_numbers:
-    matches = df[df[check_column_idx].astype(str).str.contains(rf'\b{re.escape(number)}\b', regex=True, na=False)]
-    for idx in matches.index:
-        if idx not in updates:
-            updates[idx] = []
-        updates[idx].append(number)
+# Iterate through all rows
+for idx, row in df.iterrows():
+    numbers = extract_numbers(row[search_column_idx])
+    for number in numbers:
+        if number not in mapping:
+            mapping[number] = []
+        mapping[number].append(str(row[map_column_idx]))
 
-# Update column G with found values
-for idx, values in updates.items():
-    existing_val = str(df.at[idx, search_column_idx]) if not pd.isnull(df.at[idx, search_column_idx]) else ""
-    existing_numbers = extract_numbers(existing_val)
-    combined = set(existing_numbers + values)
-    df.at[idx, search_column_idx] = ', '.join(sorted(combined, key=lambda x: float(re.sub(r'%', '', x))))
+# Prepare output DataFrame
+output_data = []
+for number, values in mapping.items():
+    row_data = {
+        "Number": number,
+        "Mapped_Values": ', '.join(values)
+    }
+    output_data.append(row_data)
 
-# Remove helper column
-df.drop(columns=['Extracted_Numbers'], inplace=True)
+output_df = pd.DataFrame(output_data)
 
-# Save back with no header (if your original file has none)
-df.to_excel(output_file, index=False, header=False)
+# Save output Excel with just these two columns
+output_df.to_excel(output_file, index=False)
 
-print(f"Completed. Updated file saved at: {output_file}")
+print(f"Completed. Output saved at: {output_file}")
