@@ -1,0 +1,106 @@
+import pandas as pd
+import tkinter as tk
+from tkinter import filedialog, ttk, messagebox
+import os
+
+class ExcelCompareAdvancedGUI:
+    def __init__(self, root):
+        self.root = root
+        self.root.title("Advanced Excel Column Comparator with Error Handling")
+
+        self.excel1_path = ""
+        self.excel2_path = ""
+
+        # Excel 1 Selection
+        tk.Label(root, text="Select Excel 1:").grid(row=0, column=0, padx=5, pady=5)
+        tk.Button(root, text="Browse", command=self.load_excel1).grid(row=0, column=1, padx=5, pady=5)
+        self.excel1_sheet = ttk.Combobox(root, state="readonly")
+        self.excel1_sheet.grid(row=0, column=2, padx=5, pady=5)
+        self.excel1_column = ttk.Combobox(root, state="readonly")
+        self.excel1_column.grid(row=0, column=3, padx=5, pady=5)
+
+        # Excel 2 Selection
+        tk.Label(root, text="Select Excel 2:").grid(row=1, column=0, padx=5, pady=5)
+        tk.Button(root, text="Browse", command=self.load_excel2).grid(row=1, column=1, padx=5, pady=5)
+        self.excel2_sheet = ttk.Combobox(root, state="readonly")
+        self.excel2_sheet.grid(row=1, column=2, padx=5, pady=5)
+        self.excel2_column = ttk.Combobox(root, state="readonly")
+        self.excel2_column.grid(row=1, column=3, padx=5, pady=5)
+
+        # Compare Button
+        tk.Button(root, text="Compare & Generate Output", command=self.compare_excels).grid(row=2, column=1, columnspan=2, pady=10)
+
+    def load_excel1(self):
+        try:
+            self.excel1_path = filedialog.askopenfilename(filetypes=[("Excel Files", "*.xlsx;*.xls")])
+            if self.excel1_path and os.path.isfile(self.excel1_path):
+                xls = pd.ExcelFile(self.excel1_path)
+                self.excel1_sheet['values'] = xls.sheet_names
+                self.excel1_sheet.bind("<<ComboboxSelected>>", self.load_excel1_columns)
+            else:
+                messagebox.showwarning("File Error", "Invalid or missing Excel 1 file.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load Excel 1: {str(e)}")
+
+    def load_excel1_columns(self, event):
+        try:
+            df = pd.read_excel(self.excel1_path, sheet_name=self.excel1_sheet.get())
+            self.excel1_column['values'] = df.columns.tolist()
+        except Exception as e:
+            messagebox.showerror("Error", f"Error loading columns from Excel 1: {str(e)}")
+
+    def load_excel2(self):
+        try:
+            self.excel2_path = filedialog.askopenfilename(filetypes=[("Excel Files", "*.xlsx;*.xls")])
+            if self.excel2_path and os.path.isfile(self.excel2_path):
+                xls = pd.ExcelFile(self.excel2_path)
+                self.excel2_sheet['values'] = xls.sheet_names
+                self.excel2_sheet.bind("<<ComboboxSelected>>", self.load_excel2_columns)
+            else:
+                messagebox.showwarning("File Error", "Invalid or missing Excel 2 file.")
+        except Exception as e:
+            messagebox.showerror("Error", f"Failed to load Excel 2: {str(e)}")
+
+    def load_excel2_columns(self, event):
+        try:
+            df = pd.read_excel(self.excel2_path, sheet_name=self.excel2_sheet.get())
+            self.excel2_column['values'] = df.columns.tolist()
+        except Exception as e:
+            messagebox.showerror("Error", f"Error loading columns from Excel 2: {str(e)}")
+
+    def compare_excels(self):
+        try:
+            if not all([self.excel1_path, self.excel2_path, self.excel1_sheet.get(), self.excel2_sheet.get(), self.excel1_column.get(), self.excel2_column.get()]):
+                messagebox.showerror("Error", "Please ensure both Excel files, sheets, and columns are selected.")
+                return
+
+            df1 = pd.read_excel(self.excel1_path, sheet_name=self.excel1_sheet.get())
+            df2 = pd.read_excel(self.excel2_path, sheet_name=self.excel2_sheet.get())
+
+            col1 = self.excel1_column.get()
+            col2 = self.excel2_column.get()
+
+            if col1 not in df1.columns or col2 not in df2.columns:
+                messagebox.showerror("Error", "Selected columns are not present in the respective Excel sheets.")
+                return
+
+            missing_rows = df1[~df1[col1].astype(str).isin(df2[col2].astype(str))]
+
+            if missing_rows.empty:
+                messagebox.showinfo("Comparison Result", "No unique rows found in Excel 1 compared to Excel 2.")
+            else:
+                output_path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel Files", "*.xlsx")])
+                if output_path:
+                    try:
+                        missing_rows.to_excel(output_path, index=False)
+                        messagebox.showinfo("Success", f"Output saved to {output_path}")
+                    except Exception as e:
+                        messagebox.showerror("Error", f"Failed to save output: {str(e)}")
+
+        except Exception as e:
+            messagebox.showerror("Error", f"An unexpected error occurred: {str(e)}")
+
+if __name__ == "__main__":
+    root = tk.Tk()
+    app = ExcelCompareAdvancedGUI(root)
+    root.mainloop()
