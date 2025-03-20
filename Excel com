@@ -6,7 +6,7 @@ import os
 class ExcelComparator:
     def __init__(self, root):
         self.root = root
-        self.root.title("Advanced Excel Row Comparator")
+        self.root.title("Advanced Excel Comparator with Strict Logic")
         self.root.geometry("700x500")
 
         self.file1_path = tk.StringVar()
@@ -19,17 +19,17 @@ class ExcelComparator:
         self.create_widgets()
 
     def create_widgets(self):
-        # Excel 1
+        # Excel File 1
         ttk.Label(self.root, text="Select Excel File 1:").grid(row=0, column=0, padx=10, pady=5, sticky="w")
         ttk.Entry(self.root, textvariable=self.file1_path, width=50).grid(row=0, column=1, padx=10, pady=5)
         ttk.Button(self.root, text="Browse", command=lambda: self.load_file(1)).grid(row=0, column=2, padx=5, pady=5)
 
-        # Excel 2
+        # Excel File 2
         ttk.Label(self.root, text="Select Excel File 2:").grid(row=1, column=0, padx=10, pady=5, sticky="w")
         ttk.Entry(self.root, textvariable=self.file2_path, width=50).grid(row=1, column=1, padx=10, pady=5)
         ttk.Button(self.root, text="Browse", command=lambda: self.load_file(2)).grid(row=1, column=2, padx=5, pady=5)
 
-        # Sheet selections
+        # Sheet Selection
         ttk.Label(self.root, text="Select Sheet from File 1:").grid(row=2, column=0, padx=10, pady=5, sticky="w")
         self.sheet1_menu = ttk.Combobox(self.root, textvariable=self.sheet1_name, state="readonly")
         self.sheet1_menu.grid(row=2, column=1, padx=10, pady=5)
@@ -38,10 +38,10 @@ class ExcelComparator:
         self.sheet2_menu = ttk.Combobox(self.root, textvariable=self.sheet2_name, state="readonly")
         self.sheet2_menu.grid(row=3, column=1, padx=10, pady=5)
 
-        # Load sheets & columns button
+        # Load Sheets and Columns Button
         ttk.Button(self.root, text="Load Sheets & Columns", command=self.load_sheets_and_columns).grid(row=4, column=1, pady=10)
 
-        # Column selections
+        # Column Selections
         ttk.Label(self.root, text="Select Column from File 1:").grid(row=5, column=0, padx=10, pady=5, sticky="w")
         self.column1_menu = ttk.Combobox(self.root, textvariable=self.column1_name, state="readonly")
         self.column1_menu.grid(row=5, column=1, padx=10, pady=5)
@@ -50,7 +50,7 @@ class ExcelComparator:
         self.column2_menu = ttk.Combobox(self.root, textvariable=self.column2_name, state="readonly")
         self.column2_menu.grid(row=6, column=1, padx=10, pady=5)
 
-        # Compare button
+        # Compare Button
         ttk.Button(self.root, text="Compare & Generate Output", command=self.compare_files).grid(row=7, column=1, pady=20)
 
     def load_file(self, file_number):
@@ -105,9 +105,11 @@ class ExcelComparator:
             ]):
                 raise ValueError("All selections must be completed before comparing.")
 
+            # Load both sheets
             df1 = pd.read_excel(self.file1_path.get(), sheet_name=self.sheet1_name.get())
             df2 = pd.read_excel(self.file2_path.get(), sheet_name=self.sheet2_name.get())
 
+            # Compare only up to the length of the shorter sheet
             min_len = min(len(df1), len(df2))
             df1 = df1.iloc[:min_len].reset_index(drop=True)
             df2 = df2.iloc[:min_len].reset_index(drop=True)
@@ -115,21 +117,20 @@ class ExcelComparator:
             excel1_col_values = df1[self.column1_name.get()]
             excel2_col_values = df2[self.column2_name.get()]
 
-            # ✅ Final condition logic:
-            # - Excel1 column has a non-empty value
-            # - Excel2 column is either empty string or NaN
+            # Strict condition:
+            # Excel1 value NOT empty AND Excel2 empty
             condition = excel1_col_values.apply(lambda x: str(x).strip() != "") & \
                         excel2_col_values.apply(lambda x: pd.isna(x) or str(x).strip() == "")
 
-            filtered_rows = df1[condition]
+            filtered_rows = df1[condition]  # Output contains all columns from Excel1 for matched rows
 
             if filtered_rows.empty:
-                messagebox.showinfo("Result", "No matching rows found based on the condition.")
+                messagebox.showinfo("Result", "No rows found that meet the strict condition.")
                 return
 
-            output_file = os.path.join(os.path.dirname(self.file1_path.get()), "comparison_output_final.xlsx")
+            output_file = os.path.join(os.path.dirname(self.file1_path.get()), "comparison_output_strict_final.xlsx")
             filtered_rows.to_excel(output_file, index=False)
-            messagebox.showinfo("Success", f"Comparison completed.\nOutput saved at:\n{output_file}")
+            messagebox.showinfo("Success", f"Comparison completed!\nOutput saved at:\n{output_file}")
 
         except Exception as e:
             messagebox.showerror("Error", f"Comparison failed: {e}")
