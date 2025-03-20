@@ -1,91 +1,143 @@
 import pandas as pd
 import tkinter as tk
-from tkinter import filedialog, messagebox
+from tkinter import filedialog, messagebox, IntVar, Checkbutton
 import os
+import shutil
 import logging
+from openpyxl import load_workbook
+from openpyxl.styles import PatternFill
+from datetime import datetime
+import traceback
 
 # Setup logging
-logging.basicConfig(filename="excel_comparison.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+log_file = f"excel_comparison_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+logging.basicConfig(filename=log_file, level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 def select_file(label):
-    """Opens a file dialog and updates the label with the selected file path."""
-    file_path = filedialog.askopenfilename(filetypes=[("Excel Files", "*.xlsx;*.xls")])
-    label.config(text=file_path)
+    """File dialog and update label"""
+    try:
+        file_path = filedialog.askopenfilename(filetypes=[("Excel Files", "*.xlsx")])
+        label.config(text=file_path)
+    except Exception as e:
+        logging.error("Error selecting file: " + str(e), exc_info=True)
+        messagebox.showerror("File Selection Error", str(e))
 
 def is_empty(value):
-    """Check if a value is considered empty."""
-    return pd.isna(value) or str(value).strip() == '' or str(value).strip().lower() == 'nan'
+    """Check for empty or nan"""
+    return pd.isna(value) or str(value).strip() in ['', 'nan', 'None']
+
+def adjust_column_width(ws):
+    """Auto-fit column width based on content"""
+    try:
+        for col_cells in ws.columns:
+            max_len = 0
+            column_letter = col_cells[0].column_letter
+            for cell in col_cells:
+                if cell.value:
+                    length = len(str(cell.value))
+                    if length > max_len:
+                        max_len = length
+            ws.column_dimensions[column_letter].width = max_len + 3
+    except Exception as e:
+        logging.error("Column width adjustment error: " + str(e), exc_info=True)
+
+def create_backup(file_path):
+    """Backup old Excel2 file before overwriting"""
+    try:
+        backup_path = file_path.replace(".xlsx", f"_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx")
+        shutil.copy2(file_path, backup_path)
+        logging.info(f"Backup created: {backup_path}")
+    except Exception as e:
+        logging.error("Error creating backup: " + str(e), exc_info=True)
 
 def compare_and_update():
-    """Compares Excel1 with Excel2 and updates Excel2 where values differ and Excel1 has a non-empty value."""
+    """Main function to compare, update and highlight changes"""
     file1 = label_file1.cget("text")
     file2 = label_file2.cget("text")
+    compare_all_columns = check_all_columns_var.get()
 
-    if not file1 or not file2 or not os.path.exists(file1) or not os.path.exists(file2):
+    if not os.path.exists(file1) or not os.path.exists(file2):
         messagebox.showerror("Error", "Please select valid Excel files.")
         return
 
     try:
-        # Load both Excel files (all sheets)
+        logging.info(f"Starting comparison between: {file1} and {file2}")
+
+        # Load files into DataFrames
         df1 = pd.read_excel(file1, sheet_name=None, engine="openpyxl")
         df2 = pd.read_excel(file2, sheet_name=None, engine="openpyxl")
 
+        # Load Excel2 as workbook for direct cell updates and formatting
+        wb2 = load_workbook(file2)
+        cyan_fill = PatternFill(start_color="00FFFF", end_color="00FFFF", fill_type="solid")
+
+        # Create backup before changes
+        create_backup(file2)
+
         changes_made = False
 
-        for sheet in df1.keys():
-            if sheet in df2:
-                sheet1 = df1[sheet]
-                sheet2 = df2[sheet]
+        for sheet_name, new_sheet_df in df1.items():
+            if sheet_name in wb2.sheetnames:
+                ws_old = wb2[sheet_name]
+                logging.info(f"Comparing sheet: {sheet_name}")
 
-                # Compare row and column limits
-                min_rows = min(sheet1.shape[0], sheet2.shape[0])
-                min_cols = min(sheet1.shape[1], sheet2.shape[1])
+                row_limit = min(new_sheet_df.shape[0], ws_old.max_row - 1)  # minus 1 for header row
+                col_limit = new_sheet_df.shape[1] if compare_all_columns else min(8, new_sheet_df.shape[1])
 
-                # Iterate through cells
-                for i in range(min_rows):
-                    for j in range(min_cols):
-                        val1 = sheet1.iloc[i, j]
-                        val2 = sheet2.iloc[i, j]
+                for i in range(row_limit):
+                    for j in range(col_limit):
+                        new_val = new_sheet_df.iloc[i, j]
+                        old_cell = ws_old.cell(row=i+2, column=j+1)  # Headers assumed at row=1
+                        old_val = old_cell.value
 
-                        # Only overwrite if:
-                        # - Excel1 value is NOT empty
-                        # - Excel1 value is different from Excel2 value
-                        if not is_empty(val1) and str(val1).strip() != str(val2).strip():
-                            sheet2.iloc[i, j] = val1
+                        # Overwrite only if new_val is not empty and differs
+                        if not is_empty(new_val) and str(new_val).strip() != str(old_val).strip():
+                            old_cell.value = new_val
+                            old_cell.fill = cyan_fill
                             changes_made = True
-                            logging.info(f"Updated: Sheet '{sheet}' Cell[{i},{j}] from '{val2}' to '{val1}'")
+                            logging.info(f"Updated: Sheet {sheet_name}, Cell R{i+2}C{j+1} from '{old_val}' to '{new_val}'")
 
-                df2[sheet] = sheet2
+                # Auto-adjust column widths after changes
+                adjust_column_width(ws_old)
 
-        # Save updated Excel2
+            else:
+                logging.warning(f"Sheet '{sheet_name}' not found in Excel 2; skipping.")
+
         if changes_made:
-            save_path = file2.replace(".xlsx", "_updated.xlsx")
-            with pd.ExcelWriter(save_path, engine="openpyxl") as writer:
-                for sheet_name, data in df2.items():
-                    data.to_excel(writer, sheet_name=sheet_name, index=False)
-            messagebox.showinfo("Success", f"Comparison complete.\nUpdated file saved as:\n{save_path}")
+            wb2.save(file2)
+            messagebox.showinfo("Completed", f"Comparison done.\nChanges saved directly to:\n{file2}\n\nBackup also created.")
+            logging.info("Comparison and update completed successfully.")
         else:
-            messagebox.showinfo("No Changes", "No differences found or all values in Excel1 were empty.")
+            messagebox.showinfo("No Changes", "No changes found to update.")
+            logging.info("No changes found.")
 
+    except PermissionError as pe:
+        logging.error("Permission error: " + str(pe), exc_info=True)
+        messagebox.showerror("Permission Error", f"Close the file in Excel and retry.\n{pe}")
     except Exception as e:
-        logging.error(f"Error: {e}", exc_info=True)
-        messagebox.showerror("Error", f"An error occurred: {e}")
+        logging.error("Unexpected error:\n" + traceback.format_exc())
+        messagebox.showerror("Error", f"An unexpected error occurred.\nSee log file: {log_file}\n\n{e}")
 
-# GUI
+# -------------------- GUI SETUP --------------------
 root = tk.Tk()
-root.title("Excel Compare & Smart Update Tool")
-root.geometry("500x300")
+root.title("Best-in-Class Excel Compare & Update Tool")
+root.geometry("600x400")
 
-tk.Label(root, text="Select Excel 1 (New File):").pack()
-label_file1 = tk.Label(root, text="", fg="blue", wraplength=400)
+tk.Label(root, text="Select Excel 1 (New File):").pack(pady=5)
+label_file1 = tk.Label(root, text="", fg="blue", wraplength=550)
 label_file1.pack()
-tk.Button(root, text="Browse", command=lambda: select_file(label_file1)).pack()
+tk.Button(root, text="Browse", command=lambda: select_file(label_file1)).pack(pady=5)
 
-tk.Label(root, text="Select Excel 2 (Old File):").pack()
-label_file2 = tk.Label(root, text="", fg="blue", wraplength=400)
+tk.Label(root, text="Select Excel 2 (Old File to Overwrite):").pack(pady=10)
+label_file2 = tk.Label(root, text="", fg="blue", wraplength=550)
 label_file2.pack()
-tk.Button(root, text="Browse", command=lambda: select_file(label_file2)).pack()
+tk.Button(root, text="Browse", command=lambda: select_file(label_file2)).pack(pady=5)
 
-tk.Button(root, text="Compare and Update", command=compare_and_update, bg="green", fg="white").pack(pady=10)
+check_all_columns_var = IntVar()
+Checkbutton(root, text="Compare all columns (default: first 8 columns only)", variable=check_all_columns_var).pack(pady=10)
+
+tk.Button(root, text="Compare & Update Now", command=compare_and_update, bg="green", fg="white", height=2, width=30).pack(pady=20)
+
+tk.Label(root, text="Changes will overwrite Excel 2.\nBackup will be created automatically.", fg="darkred").pack(pady=5)
 
 root.mainloop()
