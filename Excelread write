@@ -1,0 +1,85 @@
+import pandas as pd
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import os
+import logging
+
+# Setup logging
+logging.basicConfig(filename="excel_comparison.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+def select_file(label):
+    """Opens a file dialog and updates the label with the selected file path."""
+    file_path = filedialog.askopenfilename(filetypes=[("Excel Files", "*.xlsx;*.xls")])
+    label.config(text=file_path)
+
+def compare_and_update():
+    """Compares Excel1 with Excel2 and updates Excel2 where values are different."""
+    file1 = label_file1.cget("text")
+    file2 = label_file2.cget("text")
+
+    # Check if files are selected
+    if not file1 or not file2 or not os.path.exists(file1) or not os.path.exists(file2):
+        messagebox.showerror("Error", "Please select valid Excel files.")
+        return
+
+    try:
+        # Load Excel files
+        df1 = pd.read_excel(file1, sheet_name=None, engine="openpyxl")
+        df2 = pd.read_excel(file2, sheet_name=None, engine="openpyxl")
+
+        changes_made = False  # Track if any changes were made
+
+        for sheet in df1.keys():
+            if sheet in df2:
+                sheet1 = df1[sheet]
+                sheet2 = df2[sheet]
+
+                # Ensure both sheets have the same shape
+                min_rows = min(sheet1.shape[0], sheet2.shape[0])
+                min_cols = min(sheet1.shape[1], sheet2.shape[1])
+
+                # Compare and update values
+                for i in range(min_rows):
+                    for j in range(min_cols):
+                        val1 = str(sheet1.iloc[i, j]).strip()
+                        val2 = str(sheet2.iloc[i, j]).strip()
+
+                        if val1 != val2:
+                            sheet2.iloc[i, j] = val1  # Update old file with new values
+                            changes_made = True
+                            logging.info(f"Updated: Sheet '{sheet}' Cell[{i},{j}] from '{val2}' to '{val1}'")
+
+                df2[sheet] = sheet2  # Update the sheet in df2
+
+        # Save updated file
+        if changes_made:
+            save_path = file2.replace(".xlsx", "_updated.xlsx")
+            with pd.ExcelWriter(save_path, engine="openpyxl") as writer:
+                for sheet_name, df in df2.items():
+                    df.to_excel(writer, sheet_name=sheet_name, index=False)
+            messagebox.showinfo("Success", f"Comparison complete. Updated file saved as:\n{save_path}")
+        else:
+            messagebox.showinfo("No Changes", "No differences found between the files.")
+
+    except Exception as e:
+        logging.error(f"Error: {e}", exc_info=True)
+        messagebox.showerror("Error", f"An error occurred: {e}")
+
+# Create GUI
+root = tk.Tk()
+root.title("Excel Comparison Tool")
+root.geometry("500x300")
+
+tk.Label(root, text="Select Excel 1 (New Version):").pack()
+label_file1 = tk.Label(root, text="", fg="blue", wraplength=400)
+label_file1.pack()
+tk.Button(root, text="Browse", command=lambda: select_file(label_file1)).pack()
+
+tk.Label(root, text="Select Excel 2 (Old Version):").pack()
+label_file2 = tk.Label(root, text="", fg="blue", wraplength=400)
+label_file2.pack()
+tk.Button(root, text="Browse", command=lambda: select_file(label_file2)).pack()
+
+tk.Button(root, text="Compare and Update", command=compare_and_update, bg="green", fg="white").pack(pady=10)
+
+root.mainloop()
