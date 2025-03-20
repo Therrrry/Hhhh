@@ -1,0 +1,91 @@
+import pandas as pd
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import os
+import logging
+
+# Setup logging
+logging.basicConfig(filename="excel_comparison.log", level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+
+def select_file(label):
+    """Opens a file dialog and updates the label with the selected file path."""
+    file_path = filedialog.askopenfilename(filetypes=[("Excel Files", "*.xlsx;*.xls")])
+    label.config(text=file_path)
+
+def is_empty(value):
+    """Check if a value is considered empty."""
+    return pd.isna(value) or str(value).strip() == '' or str(value).strip().lower() == 'nan'
+
+def compare_and_update():
+    """Compares Excel1 with Excel2 and updates Excel2 where values differ and Excel1 has a non-empty value."""
+    file1 = label_file1.cget("text")
+    file2 = label_file2.cget("text")
+
+    if not file1 or not file2 or not os.path.exists(file1) or not os.path.exists(file2):
+        messagebox.showerror("Error", "Please select valid Excel files.")
+        return
+
+    try:
+        # Load both Excel files (all sheets)
+        df1 = pd.read_excel(file1, sheet_name=None, engine="openpyxl")
+        df2 = pd.read_excel(file2, sheet_name=None, engine="openpyxl")
+
+        changes_made = False
+
+        for sheet in df1.keys():
+            if sheet in df2:
+                sheet1 = df1[sheet]
+                sheet2 = df2[sheet]
+
+                # Compare row and column limits
+                min_rows = min(sheet1.shape[0], sheet2.shape[0])
+                min_cols = min(sheet1.shape[1], sheet2.shape[1])
+
+                # Iterate through cells
+                for i in range(min_rows):
+                    for j in range(min_cols):
+                        val1 = sheet1.iloc[i, j]
+                        val2 = sheet2.iloc[i, j]
+
+                        # Only overwrite if:
+                        # - Excel1 value is NOT empty
+                        # - Excel1 value is different from Excel2 value
+                        if not is_empty(val1) and str(val1).strip() != str(val2).strip():
+                            sheet2.iloc[i, j] = val1
+                            changes_made = True
+                            logging.info(f"Updated: Sheet '{sheet}' Cell[{i},{j}] from '{val2}' to '{val1}'")
+
+                df2[sheet] = sheet2
+
+        # Save updated Excel2
+        if changes_made:
+            save_path = file2.replace(".xlsx", "_updated.xlsx")
+            with pd.ExcelWriter(save_path, engine="openpyxl") as writer:
+                for sheet_name, data in df2.items():
+                    data.to_excel(writer, sheet_name=sheet_name, index=False)
+            messagebox.showinfo("Success", f"Comparison complete.\nUpdated file saved as:\n{save_path}")
+        else:
+            messagebox.showinfo("No Changes", "No differences found or all values in Excel1 were empty.")
+
+    except Exception as e:
+        logging.error(f"Error: {e}", exc_info=True)
+        messagebox.showerror("Error", f"An error occurred: {e}")
+
+# GUI
+root = tk.Tk()
+root.title("Excel Compare & Smart Update Tool")
+root.geometry("500x300")
+
+tk.Label(root, text="Select Excel 1 (New File):").pack()
+label_file1 = tk.Label(root, text="", fg="blue", wraplength=400)
+label_file1.pack()
+tk.Button(root, text="Browse", command=lambda: select_file(label_file1)).pack()
+
+tk.Label(root, text="Select Excel 2 (Old File):").pack()
+label_file2 = tk.Label(root, text="", fg="blue", wraplength=400)
+label_file2.pack()
+tk.Button(root, text="Browse", command=lambda: select_file(label_file2)).pack()
+
+tk.Button(root, text="Compare and Update", command=compare_and_update, bg="green", fg="white").pack(pady=10)
+
+root.mainloop()
