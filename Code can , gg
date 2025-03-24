@@ -1,0 +1,91 @@
+import time
+import can
+from udsoncan.client import Client
+from udsoncan.transport import CanTransport
+from udsoncan.connections import PythonIsoTpConnection
+import isotp
+
+# CAN Bus Configuration
+CAN_INTERFACE = "socketcan"  # Change based on your setup (e.g., 'pcan', 'vector')
+CAN_CHANNEL = "can0"  # Modify based on your CAN setup
+ECU_CAN_ID = 0x7E0  # ECU request ID
+RESPONSE_CAN_ID = 0x7E8  # ECU response ID
+
+# Set up CAN bus
+bus = can.interface.Bus(channel=CAN_CHANNEL, bustype=CAN_INTERFACE)
+
+# ISO-TP Configuration for UDS
+tp_layer = isotp.CanStack(bus=bus, 
+                          address=isotp.Address(rxid=RESPONSE_CAN_ID, txid=ECU_CAN_ID),
+                          params={'tx_padding': 0x00})
+
+conn = PythonIsoTpConnection(tp_layer)
+client = Client(conn)
+
+# Function to Change Session
+def change_session(session_type):
+    """Change ECU diagnostic session"""
+    with client:
+        client.change_session(session_type)
+        print(f"Session changed to {session_type}")
+
+# Function to Read CAN Message
+def read_can_message(can_id, timeout=2):
+    """Reads a CAN message with the specified ID."""
+    print(f"Waiting for CAN message with ID {hex(can_id)}...")
+    message = bus.recv(timeout)
+    
+    if message and message.arbitration_id == can_id:
+        print(f"Received message: {message}")
+        return message.data
+    else:
+        print("No message received within timeout.")
+        return None
+
+# Function to Write a Cancel Frame Format Message
+def write_can_message(can_id, data):
+    """Sends a CAN message in cancel frame format."""
+    message = can.Message(arbitration_id=can_id, data=data, is_extended_id=False)
+    bus.send(message)
+    print(f"Sent message: {message}")
+
+# Placeholder for Security Key (You can insert your logic here)
+def security_key_handling():
+    """Handle security key exchange."""
+    pass  # You will implement this
+
+# Function to Restart ECU (You can modify it based on your setup)
+def restart_ecu():
+    """Restart the ECU using diagnostic reset."""
+    with client:
+        client.ecu_reset(0x01)  # Hard reset
+        print("ECU is restarting...")
+    time.sleep(5)  # Wait for ECU to restart
+
+# Main Test Sequence
+def ecu_test():
+    """Automates the ECU test process."""
+    try:
+        # Step 1: Change Session
+        change_session(0x02)  # Extended Diagnostic Session
+        
+        # Step 2: Read Initial Message
+        initial_data = read_can_message(RESPONSE_CAN_ID)
+        
+        # Step 3: Write Message in Cancel Frame Format
+        write_can_message(ECU_CAN_ID, [0x02, 0x10, 0x03])  # Example data
+
+        # Step 4: Restart ECU
+        restart_ecu()
+        
+        # Step 5: Read Message After Restart
+        post_restart_data = read_can_message(RESPONSE_CAN_ID)
+        
+        print("ECU Test Sequence Completed.")
+
+    except Exception as e:
+        print(f"Error during ECU test: {e}")
+
+# Run ECU Test
+if __name__ == "__main__":
+    ecu_test()
