@@ -1,0 +1,91 @@
+import tkinter as tk
+from tkinter import filedialog, messagebox
+import re
+import os
+
+def convert_c_to_java(c_code):
+    java_code = []
+    
+    # Replace headers
+    c_code = re.sub(r'#include\s*<stdio\.h>', 'import java.util.*;', c_code)
+    c_code = re.sub(r'#include\s*<stdlib\.h>', '', c_code)
+
+    # Replace main function
+    c_code = re.sub(r'int\s+main\s*\(\s*void\s*\)', 'public class Main {\n    public static void main(String[] args)', c_code)
+    
+    # Replace printf
+    c_code = re.sub(r'printf\s*\(\s*"(.*?)"\s*\);', r'System.out.println("\1");', c_code)
+    
+    # Replace scanf
+    c_code = re.sub(r'scanf\s*\(\s*"(.*?)",\s*&(\w+)\s*\);', r'\2 = scanner.next();', c_code)
+
+    # Replace variable declarations (int, float, char, double)
+    c_code = re.sub(r'int\s+(\w+);', r'int \1;', c_code)
+    c_code = re.sub(r'float\s+(\w+);', r'float \1;', c_code)
+    c_code = re.sub(r'double\s+(\w+);', r'double \1;', c_code)
+    c_code = re.sub(r'char\s+(\w+);', r'char \1;', c_code)
+
+    # Replace return 0
+    c_code = re.sub(r'return\s+0;', '', c_code)
+
+    # Handle braces and indentation
+    lines = c_code.split("\n")
+    for line in lines:
+        if "{" in line and "}" not in line:
+            java_code.append(line)
+        elif "}" in line and "{" not in line:
+            java_code.append(line)
+        else:
+            java_code.append("    " + line)  # Indent inside class
+
+    # Add Scanner initialization if scanf was found
+    if "scanner.next()" in c_code:
+        java_code.insert(1, "    static Scanner scanner = new Scanner(System.in);")
+
+    # Close class
+    java_code.append("}")
+
+    return "\n".join(java_code)
+
+
+def open_file():
+    file_path = filedialog.askopenfilename(filetypes=[("C Files", "*.c")])
+    if file_path:
+        with open(file_path, "r") as file:
+            c_code = file.read()
+        converted_code = convert_c_to_java(c_code)
+        text_output.delete("1.0", tk.END)
+        text_output.insert(tk.END, converted_code)
+        global last_saved_code
+        last_saved_code = converted_code
+        global java_filename
+        java_filename = os.path.splitext(os.path.basename(file_path))[0] + ".java"
+
+
+def save_file():
+    if last_saved_code:
+        save_path = filedialog.asksaveasfilename(defaultextension=".java", filetypes=[("Java Files", "*.java")], initialfile=java_filename)
+        if save_path:
+            with open(save_path, "w") as file:
+                file.write(last_saved_code)
+            messagebox.showinfo("Success", "Java code saved successfully!")
+
+
+# GUI Setup
+root = tk.Tk()
+root.title("C to Java Converter")
+root.geometry("600x500")
+
+btn_open = tk.Button(root, text="Open C File", command=open_file, width=20)
+btn_open.pack(pady=10)
+
+text_output = tk.Text(root, wrap=tk.WORD, height=20, width=70)
+text_output.pack(padx=10, pady=10)
+
+btn_save = tk.Button(root, text="Save as Java File", command=save_file, width=20)
+btn_save.pack(pady=10)
+
+last_saved_code = ""
+java_filename = "Converted.java"
+
+root.mainloop()
