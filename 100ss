@@ -1,0 +1,8 @@
+The software functions in the H-Bridge system ensure precise motor control, protection, and fault detection. The system starts with Power ON, followed by setting the Enable PIN high to activate the gate driver. PWM signals control MOSFET switching, regulating motor speed and direction. The ISO feedback enhances current sensing using an OpAmp. Short circuit detection (SCDL) and ERR activation prevent hardware damage by shutting down outputs. The system monitors over-voltage (VS, VDH) and under-voltage conditions, triggering error modes for protection. Temperature monitoring detects overheating, activating the ERR pin. The sleep mode deactivates the chip for power saving, while reset mode restores normal operation. These integrated functions enable robust error handling, adaptive control, and enhanced motor safety, making the design suitable for automotive and industrial applications.
+
+
+
+
+
+
+
