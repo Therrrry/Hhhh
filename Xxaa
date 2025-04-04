@@ -4,8 +4,8 @@ import pandas as pd
 import os
 
 lid_value = "04-apl-00"
+expected_columns = ["Module Name", "Interface Name", "SID Name", "LID"]
 
-# Save to Excel function
 def save_to_excel():
     module = module_entry.get().strip()
     interfaces = interface_entry.get().strip()
@@ -13,9 +13,10 @@ def save_to_excel():
     excel_path = file_path.get().strip()
 
     if not module or not interfaces or not sid or not excel_path:
-        messagebox.showerror("Input Error", "Please fill all fields and select file.")
+        messagebox.showerror("Input Error", "Please fill all fields and select a file.")
         return
 
+    # Split interfaces and create column values
     interface_list = [i.strip() for i in interfaces.split(",") if i.strip()]
     module_col = [module] + [""] * (len(interface_list) - 1)
 
@@ -28,13 +29,21 @@ def save_to_excel():
 
     df_new = pd.DataFrame(data)
 
+    # Append to Excel or create if doesn't exist
     if os.path.exists(excel_path):
         try:
             df_existing = pd.read_excel(excel_path)
+
+            # Make sure columns match expected
+            for col in expected_columns:
+                if col not in df_existing.columns:
+                    df_existing[col] = ""
+
+            df_existing = df_existing[expected_columns]
             df_combined = pd.concat([df_existing, df_new], ignore_index=True)
             df_combined.to_excel(excel_path, index=False)
         except Exception as e:
-            messagebox.showerror("Error", f"Failed to write to Excel:\n{e}")
+            messagebox.showerror("Error", f"Failed to update Excel:\n{e}")
             return
     else:
         try:
@@ -43,11 +52,11 @@ def save_to_excel():
             messagebox.showerror("Error", f"Failed to create Excel:\n{e}")
             return
 
-    # Verify write
+    # Verify append
     try:
         df_check = pd.read_excel(excel_path)
-        if df_check.tail(len(df_new)).equals(df_new.reset_index(drop=True)):
-            messagebox.showinfo("Success", f"Data saved successfully to:\n{excel_path}")
+        if df_check.tail(len(df_new)).reset_index(drop=True).equals(df_new.reset_index(drop=True)):
+            messagebox.showinfo("Success", f"Module '{module}' data saved to:\n{excel_path}")
             module_entry.delete(0, tk.END)
             interface_entry.delete(0, tk.END)
             sid_entry.delete(0, tk.END)
@@ -56,13 +65,12 @@ def save_to_excel():
     except Exception as e:
         messagebox.showerror("Verification Error", f"Could not read back Excel:\n{e}")
 
-# File browser
 def browse_file():
     path = filedialog.asksaveasfilename(defaultextension=".xlsx", filetypes=[("Excel Files", "*.xlsx")])
     if path:
         file_path.set(path)
 
-# GUI window
+# GUI Setup
 root = tk.Tk()
 root.title("Module Interface Entry with Excel Save")
 
